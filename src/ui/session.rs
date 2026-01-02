@@ -1,0 +1,77 @@
+use uuid::Uuid;
+
+use crate::agent::{AgentHandle, AgentType, SessionId, TokenUsage};
+use crate::ui::components::{ChatView, InputBox, StatusBar};
+
+/// Represents a single agent session (one tab)
+pub struct AgentSession {
+    /// Unique identifier for this session
+    pub id: Uuid,
+    /// Type of agent (Claude or Codex)
+    pub agent_type: AgentType,
+    /// Chat view component
+    pub chat_view: ChatView,
+    /// Input box component
+    pub input_box: InputBox,
+    /// Status bar component
+    pub status_bar: StatusBar,
+    /// Handle to the running agent process (if any)
+    pub agent_handle: Option<AgentHandle>,
+    /// Agent session ID (from the agent itself)
+    pub agent_session_id: Option<SessionId>,
+    /// Whether the agent is currently processing
+    pub is_processing: bool,
+    /// Accumulated token usage
+    pub total_usage: TokenUsage,
+    /// Turn count
+    pub turn_count: u32,
+}
+
+impl AgentSession {
+    pub fn new(agent_type: AgentType) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            agent_type,
+            chat_view: ChatView::new(),
+            input_box: InputBox::new(),
+            status_bar: StatusBar::new(agent_type),
+            agent_handle: None,
+            agent_session_id: None,
+            is_processing: false,
+            total_usage: TokenUsage::default(),
+            turn_count: 0,
+        }
+    }
+
+    /// Get display name for the tab
+    pub fn tab_name(&self) -> String {
+        if let Some(ref session_id) = self.agent_session_id {
+            let id_short = &session_id.as_str()[..8.min(session_id.as_str().len())];
+            format!("{} ({})", self.agent_type.as_str(), id_short)
+        } else {
+            format!("{} (new)", self.agent_type.as_str())
+        }
+    }
+
+    /// Update status bar with current state
+    pub fn update_status(&mut self) {
+        self.status_bar.set_session_id(self.agent_session_id.clone());
+        self.status_bar.set_token_usage(self.total_usage.clone());
+        self.status_bar.set_processing(self.is_processing);
+    }
+
+    /// Add token usage from a turn
+    pub fn add_usage(&mut self, usage: TokenUsage) {
+        self.total_usage.input_tokens += usage.input_tokens;
+        self.total_usage.output_tokens += usage.output_tokens;
+        self.total_usage.cached_tokens += usage.cached_tokens;
+        self.total_usage.total_tokens += usage.total_tokens;
+        self.turn_count += 1;
+        self.update_status();
+    }
+
+    /// Advance spinner animation (called on tick)
+    pub fn tick(&mut self) {
+        self.status_bar.tick();
+    }
+}
