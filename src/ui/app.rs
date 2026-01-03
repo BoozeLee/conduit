@@ -465,6 +465,9 @@ impl App {
 
     /// Refresh sidebar data from database
     fn refresh_sidebar_data(&mut self) {
+        // Capture current expansion state before rebuild
+        let expanded_repos = self.sidebar_data.expanded_repo_ids();
+
         self.sidebar_data = SidebarData::new();
 
         let Some(repo_dao) = &self.repo_dao else {
@@ -487,6 +490,11 @@ impl App {
                         .add_repository(repo.id, &repo.name, workspace_info);
                 }
             }
+        }
+
+        // Restore expansion state
+        for repo_id in expanded_repos {
+            self.sidebar_data.expand_repo(repo_id);
         }
     }
 
@@ -1582,13 +1590,15 @@ impl App {
     }
 
     /// Open a workspace (create or switch to tab)
-    fn open_workspace(&mut self, workspace_id: uuid::Uuid) {
+    /// If `close_sidebar` is true, the sidebar will be hidden after opening.
+    fn open_workspace_with_options(&mut self, workspace_id: uuid::Uuid, close_sidebar: bool) {
         // Check if there's already a tab with this workspace - switch to it
         if let Some(existing_index) = self.find_tab_for_workspace(workspace_id) {
             self.tab_manager.switch_to(existing_index);
-            // Close the sidebar and switch to normal mode
-            self.sidebar_state.hide();
-            self.input_mode = InputMode::Normal;
+            if close_sidebar {
+                self.sidebar_state.hide();
+                self.input_mode = InputMode::Normal;
+            }
             return;
         }
 
@@ -1685,9 +1695,16 @@ impl App {
             }
         }
 
-        // Close the sidebar and switch to normal mode
-        self.sidebar_state.hide();
-        self.input_mode = InputMode::Normal;
+        // Close the sidebar and switch to normal mode (if requested)
+        if close_sidebar {
+            self.sidebar_state.hide();
+            self.input_mode = InputMode::Normal;
+        }
+    }
+
+    /// Open a workspace (create or switch to tab), closing the sidebar
+    fn open_workspace(&mut self, workspace_id: uuid::Uuid) {
+        self.open_workspace_with_options(workspace_id, true);
     }
 
     /// Find the tab index for a workspace if it's already open
@@ -2453,10 +2470,9 @@ impl App {
                     self.sidebar_data.toggle_at(clicked_index);
                 }
                 NodeType::Workspace => {
-                    // Open workspace
-                    self.open_workspace(node.id);
-                    self.input_mode = InputMode::Normal;
-                    self.sidebar_state.set_focused(false);
+                    // Open workspace but keep sidebar open (clicking just selects/focuses)
+                    self.open_workspace_with_options(node.id, false);
+                    // Sidebar stays open and focused - user can press Enter or Esc to close
                 }
                 NodeType::Action(ActionType::NewWorkspace) => {
                     // Create new workspace
