@@ -33,6 +33,10 @@ pub struct ChatMessage {
     pub is_streaming: bool,
     /// Pre-rendered summary (for Summary role)
     pub summary: Option<TurnSummary>,
+    /// Whether this tool message is collapsed (only for Tool role)
+    pub is_collapsed: bool,
+    /// Exit code for tool execution (e.g., shell commands)
+    pub exit_code: Option<i32>,
 }
 
 impl ChatMessage {
@@ -44,6 +48,8 @@ impl ChatMessage {
             tool_args: None,
             is_streaming: false,
             summary: None,
+            is_collapsed: false,
+            exit_code: None,
         }
     }
 
@@ -55,6 +61,8 @@ impl ChatMessage {
             tool_args: None,
             is_streaming: false,
             summary: None,
+            is_collapsed: false,
+            exit_code: None,
         }
     }
 
@@ -66,6 +74,27 @@ impl ChatMessage {
             tool_args: Some(args.into()),
             is_streaming: false,
             summary: None,
+            is_collapsed: false, // Default to expanded
+            exit_code: None,
+        }
+    }
+
+    /// Create a tool message with exit code
+    pub fn tool_with_exit(
+        name: impl Into<String>,
+        args: impl Into<String>,
+        content: impl Into<String>,
+        exit_code: Option<i32>,
+    ) -> Self {
+        Self {
+            role: MessageRole::Tool,
+            content: content.into(),
+            tool_name: Some(name.into()),
+            tool_args: Some(args.into()),
+            is_streaming: false,
+            summary: None,
+            is_collapsed: false,
+            exit_code,
         }
     }
 
@@ -77,6 +106,8 @@ impl ChatMessage {
             tool_args: None,
             is_streaming: false,
             summary: None,
+            is_collapsed: false,
+            exit_code: None,
         }
     }
 
@@ -88,6 +119,8 @@ impl ChatMessage {
             tool_args: None,
             is_streaming: false,
             summary: None,
+            is_collapsed: false,
+            exit_code: None,
         }
     }
 
@@ -99,6 +132,8 @@ impl ChatMessage {
             tool_args: None,
             is_streaming: true,
             summary: None,
+            is_collapsed: false,
+            exit_code: None,
         }
     }
 
@@ -110,6 +145,15 @@ impl ChatMessage {
             tool_args: None,
             is_streaming: false,
             summary: Some(summary),
+            is_collapsed: false,
+            exit_code: None,
+        }
+    }
+
+    /// Toggle collapsed state for tool messages
+    pub fn toggle_collapsed(&mut self) {
+        if self.role == MessageRole::Tool {
+            self.is_collapsed = !self.is_collapsed;
         }
     }
 }
@@ -210,6 +254,48 @@ impl ChatView {
     /// Get streaming buffer (for debug dump)
     pub fn streaming_buffer(&self) -> Option<&str> {
         self.streaming_buffer.as_deref()
+    }
+
+    /// Toggle collapsed state for a tool message at the given index
+    pub fn toggle_tool_at(&mut self, index: usize) {
+        if let Some(msg) = self.messages.get_mut(index) {
+            if msg.role == MessageRole::Tool {
+                msg.is_collapsed = !msg.is_collapsed;
+            }
+        }
+    }
+
+    /// Collapse all tool messages
+    pub fn collapse_all_tools(&mut self) {
+        for msg in &mut self.messages {
+            if msg.role == MessageRole::Tool {
+                msg.is_collapsed = true;
+            }
+        }
+    }
+
+    /// Expand all tool messages
+    pub fn expand_all_tools(&mut self) {
+        for msg in &mut self.messages {
+            if msg.role == MessageRole::Tool {
+                msg.is_collapsed = false;
+            }
+        }
+    }
+
+    /// Get indices of all tool messages
+    pub fn tool_message_indices(&self) -> Vec<usize> {
+        self.messages
+            .iter()
+            .enumerate()
+            .filter_map(|(i, msg)| {
+                if msg.role == MessageRole::Tool {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Build lines for rendering
@@ -360,59 +446,330 @@ impl ChatView {
         }
     }
 
-    /// Format tool messages in Claude Code style
-    fn format_tool_message(&self, msg: &ChatMessage, lines: &mut Vec<Line<'static>>) {
-        let tool_name = msg.tool_name.as_deref().unwrap_or("Tool");
-        let tool_args = msg.tool_args.as_deref().unwrap_or("");
+    /// Get icon for tool type
+    fn tool_icon(tool_name: &str) -> &'static str {
+        match tool_name {
+            "Bash" => "⚡",
+            "Read" => "📄",
+            "Write" => "💾",
+            "Edit" => "✏️",
+            "Glob" => "🔍",
+            "Grep" => "🔎",
+            "LS" => "📂",
+            "Task" => "🤖",
+            "TodoWrite" => "📋",
+            _ => "🔧",
+        }
+    }
 
-        // Header: ● ToolName(args)
-        let header_spans = vec![
-            Span::styled("● ", Style::default().fg(Color::Green)),
+    /// Get status icon for todo items
+    fn todo_status_icon(status: &str) -> &'static str {
+        match status {
+            "completed" => "✅",
+            "in_progress" => "🔄",
+            "pending" | _ => "⬜",
+        }
+    }
+
+    /// Format TodoWrite tool as a checkbox list
+    fn format_todowrite_message(&self, msg: &ChatMessage, lines: &mut Vec<Line<'static>>) {
+        let tool_args = msg.tool_args.as_deref().unwrap_or("{}");
+
+        // Try to parse the todos from arguments
+        let todos: Vec<(String, String)> = match serde_json::from_str::<serde_json::Value>(tool_args) {
+            Ok(json) => {
+                if let Some(todos_array) = json.get("todos").and_then(|t| t.as_array()) {
+                    todos_array
+                        .iter()
+                        .filter_map(|todo| {
+                            let content = todo.get("content").and_then(|c| c.as_str())?;
+                            let status = todo.get("status").and_then(|s| s.as_str()).unwrap_or("pending");
+                            Some((content.to_string(), status.to_string()))
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            Err(_) => Vec::new(),
+        };
+
+        // Calculate stats
+        let total = todos.len();
+        let completed = todos.iter().filter(|(_, s)| s == "completed").count();
+        let in_progress = todos.iter().filter(|(_, s)| s == "in_progress").count();
+
+        // Header
+        let header_stats = if total > 0 {
+            format!("{}/{} completed", completed, total)
+        } else {
+            "No tasks".to_string()
+        };
+
+        lines.push(Line::from(vec![
             Span::styled(
-                tool_name.to_string(),
+                "┌─ 📋 Todo List ",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("({})", tool_args),
+                format!("─ {} ", header_stats),
                 Style::default().fg(Color::DarkGray),
             ),
-        ];
-        lines.push(Line::from(header_spans));
+        ]));
 
-        // Output lines with tree connector - parse ANSI codes
-        let content_lines: Vec<&str> = msg.content.lines().collect();
-        let last_idx = content_lines.len().saturating_sub(1);
-
-        for (i, line) in content_lines.iter().enumerate() {
-            let connector = if i == last_idx { "└ " } else { "│ " };
-
-            // Parse ANSI escape codes in the line
-            let parsed_text = line.as_bytes().into_text();
-            let content_spans: Vec<Span<'static>> = match parsed_text {
-                Ok(text) => {
-                    // Flatten all lines from the parsed text into spans
-                    text.lines
-                        .into_iter()
-                        .flat_map(|l| l.spans)
-                        .map(|s| Span::styled(s.content.into_owned(), s.style))
-                        .collect()
-                }
-                Err(_) => {
-                    // Fallback to plain text if parsing fails
-                    vec![Span::styled(line.to_string(), Style::default().fg(Color::White))]
-                }
+        if todos.is_empty() {
+            // No todos parsed - show raw content
+            lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    "(Could not parse todo list)",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        } else if msg.is_collapsed {
+            // Collapsed view - show summary
+            let summary = format!(
+                "{} total: {} completed, {} in progress, {} pending",
+                total,
+                completed,
+                in_progress,
+                total - completed - in_progress
+            );
+            lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(summary, Style::default().fg(Color::DarkGray)),
+            ]));
+        } else {
+            // Expanded view - show all todos
+            let max_display = 15; // Limit displayed items
+            let display_todos = if todos.len() > max_display {
+                &todos[..max_display]
+            } else {
+                &todos[..]
             };
 
-            // Build the line with connector prefix and parsed content
-            let mut line_spans = vec![
-                Span::styled(connector, Style::default().fg(Color::DarkGray)),
-                Span::raw("   "),
-            ];
-            line_spans.extend(content_spans);
-            lines.push(Line::from(line_spans));
+            for (content, status) in display_todos {
+                let icon = Self::todo_status_icon(status);
+                let text_color = match status.as_str() {
+                    "completed" => Color::DarkGray,
+                    "in_progress" => Color::Yellow,
+                    _ => Color::White,
+                };
+
+                // Truncate long content
+                let display_content = if content.len() > 70 {
+                    format!("{}...", &content[..67])
+                } else {
+                    content.clone()
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled("│  ", Style::default().fg(Color::Cyan)),
+                    Span::raw(format!("{} ", icon)),
+                    Span::styled(display_content, Style::default().fg(text_color)),
+                ]));
+            }
+
+            // Show truncation notice
+            if todos.len() > max_display {
+                let remaining = todos.len() - max_display;
+                let remaining_pending = todos[max_display..]
+                    .iter()
+                    .filter(|(_, s)| s != "completed")
+                    .count();
+                let note = if remaining_pending > 0 {
+                    format!("... (+{} more, {} pending)", remaining, remaining_pending)
+                } else {
+                    format!("... (+{} more)", remaining)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("│  ", Style::default().fg(Color::Cyan)),
+                    Span::styled("   ", Style::default()),
+                    Span::styled(note, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
         }
+
+        // Footer
+        let status_icon = if completed == total && total > 0 {
+            ("✓", "All done", Color::Green)
+        } else if in_progress > 0 {
+            ("●", "In progress", Color::Yellow)
+        } else {
+            ("✓", "Updated", Color::Green)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("└─ {} ", status_icon.0),
+                Style::default().fg(status_icon.2),
+            ),
+            Span::styled(
+                status_icon.1,
+                Style::default()
+                    .fg(status_icon.2)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    /// Format tool messages as rich cards
+    fn format_tool_message(&self, msg: &ChatMessage, lines: &mut Vec<Line<'static>>) {
+        let tool_name = msg.tool_name.as_deref().unwrap_or("Tool");
+
+        // Special formatting for TodoWrite
+        if tool_name == "TodoWrite" {
+            return self.format_todowrite_message(msg, lines);
+        }
+
+        let tool_args = msg.tool_args.as_deref().unwrap_or("");
+        let icon = Self::tool_icon(tool_name);
+        let content_lines: Vec<&str> = msg.content.lines().collect();
+        let line_count = content_lines.len();
+
+        // Determine success/error state
+        let (is_error, status_icon, status_color) = if let Some(code) = msg.exit_code {
+            if code == 0 {
+                (false, "✓", Color::Green)
+            } else {
+                (true, "✗", Color::Red)
+            }
+        } else if msg.content.starts_with("Error:") {
+            (true, "✗", Color::Red)
+        } else {
+            (false, "✓", Color::Green)
+        };
+
+        // Truncate args if too long
+        let args_display = if tool_args.len() > 60 {
+            format!("{}...", &tool_args[..57])
+        } else {
+            tool_args.to_string()
+        };
+
+        // Header: ┌─ 🔧 ToolName ─────────────────
+        let header_text = format!("┌─ {} {} ", icon, tool_name);
+        let mut header_spans = vec![
+            Span::styled(
+                header_text,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+
+        // Add args on same line if short, otherwise on next line
+        if !args_display.is_empty() && args_display.len() <= 40 {
+            header_spans.push(Span::styled(
+                format!("─ {} ", args_display),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(header_spans));
+
+        // Args on separate line if long
+        if !args_display.is_empty() && args_display.len() > 40 {
+            lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("$ {}", args_display),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+        }
+
+        // If collapsed, show summary only
+        if msg.is_collapsed {
+            let summary = if line_count > 0 {
+                let first_line = content_lines[0];
+                let preview = if first_line.len() > 50 {
+                    format!("{}...", &first_line[..47])
+                } else {
+                    first_line.to_string()
+                };
+                format!("{} ({} lines)", preview, line_count)
+            } else {
+                "No output".to_string()
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(summary, Style::default().fg(Color::DarkGray)),
+            ]));
+        } else {
+            // Show full output with connectors
+            let max_lines = 50; // Limit displayed lines
+            let truncated = line_count > max_lines;
+            let display_lines = if truncated {
+                &content_lines[..max_lines]
+            } else {
+                &content_lines[..]
+            };
+
+            for line in display_lines {
+                // Parse ANSI escape codes in the line
+                let parsed_text = line.as_bytes().into_text();
+                let content_spans: Vec<Span<'static>> = match parsed_text {
+                    Ok(text) => {
+                        text.lines
+                            .into_iter()
+                            .flat_map(|l| l.spans)
+                            .map(|s| Span::styled(s.content.into_owned(), s.style))
+                            .collect()
+                    }
+                    Err(_) => {
+                        vec![Span::styled(line.to_string(), Style::default().fg(Color::White))]
+                    }
+                };
+
+                let mut line_spans = vec![
+                    Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                    Span::raw("  "),
+                ];
+                line_spans.extend(content_spans);
+                lines.push(Line::from(line_spans));
+            }
+
+            // Show truncation notice
+            if truncated {
+                lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        format!("  ... ({} more lines)", line_count - max_lines),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+        }
+
+        // Footer with status
+        let exit_info = if let Some(code) = msg.exit_code {
+            format!(" (exit: {})", code)
+        } else {
+            String::new()
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("└─ {} ", status_icon),
+                Style::default().fg(status_color),
+            ),
+            Span::styled(
+                if is_error { "Failed" } else { "Completed" },
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(exit_info, Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(" ─ {} lines", line_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
     }
 
     /// Format turn summary message

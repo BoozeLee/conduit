@@ -98,16 +98,14 @@ impl StatusBar {
 
         spans.push(Span::raw(" "));
 
-        // Model name
-        let model_display = if let Some(ref model_id) = self.model {
-            // Try to find the model's display name
-            ModelRegistry::find_model(self.agent_type, model_id)
-                .map(|m| m.display_name)
-                .unwrap_or_else(|| model_id.clone())
-        } else {
-            // Show default model
-            ModelRegistry::default_model(self.agent_type)
-        };
+        // Model name - always use display name for consistency
+        let model_id = self
+            .model
+            .clone()
+            .unwrap_or_else(|| ModelRegistry::default_model(self.agent_type));
+        let model_display = ModelRegistry::find_model(self.agent_type, &model_id)
+            .map(|m| m.display_name)
+            .unwrap_or(model_id);
 
         spans.push(Span::styled(
             format!("{} ", model_display),

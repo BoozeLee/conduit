@@ -22,6 +22,13 @@ struct FunctionCallInfo {
     command: String,
 }
 
+/// Info extracted from a Claude tool_use block for later lookup
+#[derive(Clone)]
+struct ClaudeToolUseInfo {
+    name: String,
+    input: serde_json::Value,
+}
+
 /// Debug entry for history loading - shows what happened to each JSONL line
 #[derive(Debug, Clone)]
 pub struct HistoryDebugEntry {
@@ -105,7 +112,10 @@ fn find_claude_session_file(projects_dir: &PathBuf, session_id: &str) -> Result<
 fn parse_claude_history_file(path: &PathBuf) -> Result<Vec<ChatMessage>, HistoryError> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let mut messages = Vec::new();
+
+    // First pass: collect all entries and build tool_use lookup
+    let mut entries = Vec::new();
+    let mut tool_uses: HashMap<String, ClaudeToolUseInfo> = HashMap::new();
 
     for line in reader.lines() {
         let line = line?;
@@ -114,16 +124,43 @@ fn parse_claude_history_file(path: &PathBuf) -> Result<Vec<ChatMessage>, History
         }
 
         if let Ok(entry) = serde_json::from_str::<Value>(&line) {
-            if let Some(msg) = convert_claude_entry(&entry) {
-                messages.push(msg);
+            // Extract tool_use blocks from assistant messages
+            if entry.get("type").and_then(|t| t.as_str()) == Some("assistant") {
+                if let Some(message) = entry.get("message") {
+                    if let Some(content) = message.get("content").and_then(|c| c.as_array()) {
+                        for block in content {
+                            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                                if let (Some(id), Some(name)) = (
+                                    block.get("id").and_then(|i| i.as_str()),
+                                    block.get("name").and_then(|n| n.as_str()),
+                                ) {
+                                    let input = block.get("input").cloned().unwrap_or(Value::Null);
+                                    tool_uses.insert(id.to_string(), ClaudeToolUseInfo {
+                                        name: name.to_string(),
+                                        input,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
+            entries.push(entry);
         }
+    }
+
+    // Second pass: convert entries to messages
+    let mut messages = Vec::new();
+    for entry in &entries {
+        let converted = convert_claude_entry_with_tools(entry, &tool_uses);
+        messages.extend(converted);
     }
 
     Ok(messages)
 }
 
-/// Convert a Claude JSONL entry to ChatMessage
+/// Convert a Claude JSONL entry to ChatMessage (legacy, used by tests)
+#[cfg(test)]
 fn convert_claude_entry(entry: &Value) -> Option<ChatMessage> {
     let entry_type = entry.get("type")?.as_str()?;
 
@@ -178,6 +215,225 @@ fn convert_claude_entry(entry: &Value) -> Option<ChatMessage> {
             Some(display.to_chat_message())
         }
         _ => None, // Skip queue-operation and other types
+    }
+}
+
+/// Convert a Claude JSONL entry to ChatMessages with proper tool handling
+/// Returns a Vec because assistant messages with tool_use blocks may produce multiple messages
+fn convert_claude_entry_with_tools(
+    entry: &Value,
+    tool_uses: &HashMap<String, ClaudeToolUseInfo>,
+) -> Vec<ChatMessage> {
+    let entry_type = match entry.get("type").and_then(|t| t.as_str()) {
+        Some(t) => t,
+        None => return vec![],
+    };
+
+    match entry_type {
+        "user" => {
+            // User message can have string content OR array of content blocks (including tool_result)
+            if let Some(message) = entry.get("message") {
+                if let Some(content) = message.get("content") {
+                    // String content - regular user message
+                    if let Some(text) = content.as_str() {
+                        let display = MessageDisplay::User {
+                            content: text.to_string(),
+                        };
+                        return vec![display.to_chat_message()];
+                    }
+
+                    // Array content - may contain tool_result blocks
+                    if let Some(blocks) = content.as_array() {
+                        let mut messages = Vec::new();
+
+                        for block in blocks {
+                            let block_type = block.get("type").and_then(|t| t.as_str());
+
+                            match block_type {
+                                Some("tool_result") => {
+                                    // Tool result inside user message
+                                    if let Some(tool_use_id) = block.get("tool_use_id").and_then(|id| id.as_str()) {
+                                        if let Some(tool_info) = tool_uses.get(tool_use_id) {
+                                            let result_content = block
+                                                .get("content")
+                                                .and_then(|c| c.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let is_error = block
+                                                .get("is_error")
+                                                .and_then(|e| e.as_bool())
+                                                .unwrap_or(false);
+
+                                            let args = format_tool_args(&tool_info.name, &tool_info.input);
+                                            let output = if is_error {
+                                                format!("Error: {}", result_content)
+                                            } else {
+                                                result_content
+                                            };
+
+                                            let display = MessageDisplay::Tool {
+                                                name: MessageDisplay::tool_display_name_owned(&tool_info.name),
+                                                args,
+                                                output,
+                                                exit_code: None,
+                                            };
+                                            messages.push(display.to_chat_message());
+                                        }
+                                    }
+                                }
+                                Some("text") => {
+                                    // Text block in user message (rare but possible)
+                                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                        let display = MessageDisplay::User {
+                                            content: text.to_string(),
+                                        };
+                                        messages.push(display.to_chat_message());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        return messages;
+                    }
+                }
+            }
+            vec![]
+        }
+        "assistant" => {
+            // Assistant message with content blocks
+            let mut messages = Vec::new();
+
+            if let Some(message) = entry.get("message") {
+                if let Some(content) = message.get("content") {
+                    if let Some(text) = content.as_str() {
+                        // Simple string content
+                        let display = MessageDisplay::Assistant {
+                            content: text.to_string(),
+                            is_streaming: false,
+                        };
+                        messages.push(display.to_chat_message());
+                    } else if let Some(blocks) = content.as_array() {
+                        // Extract only text blocks as assistant message
+                        let texts: Vec<String> = blocks
+                            .iter()
+                            .filter_map(|block| {
+                                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                    block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        if !texts.is_empty() {
+                            let display = MessageDisplay::Assistant {
+                                content: texts.join("\n"),
+                                is_streaming: false,
+                            };
+                            messages.push(display.to_chat_message());
+                        }
+
+                        // Note: tool_use blocks are NOT added here
+                        // They will be matched with tool_result in user messages
+                    }
+                }
+            }
+            messages
+        }
+        "tool_result" => {
+            // Tool result: {"type":"tool_result","tool_use_id":"...","content":"...", "is_error":false}
+            if let Some(tool_use_id) = entry.get("tool_use_id").and_then(|id| id.as_str()) {
+                if let Some(tool_info) = tool_uses.get(tool_use_id) {
+                    let content = entry
+                        .get("content")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let is_error = entry
+                        .get("is_error")
+                        .and_then(|e| e.as_bool())
+                        .unwrap_or(false);
+
+                    // Format arguments for display
+                    let args = format_tool_args(&tool_info.name, &tool_info.input);
+
+                    let output = if is_error {
+                        format!("Error: {}", content)
+                    } else {
+                        content
+                    };
+
+                    let display = MessageDisplay::Tool {
+                        name: MessageDisplay::tool_display_name_owned(&tool_info.name),
+                        args,
+                        output,
+                        exit_code: None, // Claude doesn't provide exit codes
+                    };
+                    return vec![display.to_chat_message()];
+                }
+            }
+            vec![]
+        }
+        _ => vec![], // Skip queue-operation and other types
+    }
+}
+
+/// Format tool arguments for display based on tool type
+fn format_tool_args(tool_name: &str, input: &Value) -> String {
+    let fallback = || serde_json::to_string(input).unwrap_or_default();
+
+    match tool_name {
+        "Bash" | "exec_command" | "shell" | "local_shell_call" | "command_execution" => {
+            // Extract command from input
+            input
+                .get("command")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(fallback)
+        }
+        "Read" | "read_file" => {
+            // Extract file path
+            input
+                .get("file_path")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(fallback)
+        }
+        "Write" | "write_file" => {
+            // Extract file path
+            input
+                .get("file_path")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(fallback)
+        }
+        "Edit" => {
+            // Extract file path
+            input
+                .get("file_path")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(fallback)
+        }
+        "Glob" => {
+            // Extract pattern
+            input
+                .get("pattern")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(fallback)
+        }
+        "Grep" => {
+            // Extract pattern and path
+            let pattern = input.get("pattern").and_then(|p| p.as_str()).unwrap_or("");
+            let path = input.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+            format!("{} in {}", pattern, path)
+        }
+        _ => {
+            // Default: serialize the whole input
+            fallback()
+        }
     }
 }
 

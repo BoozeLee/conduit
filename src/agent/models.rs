@@ -115,7 +115,7 @@ impl ModelRegistry {
     /// Get the default model for an agent type
     pub fn default_model(agent_type: AgentType) -> String {
         match agent_type {
-            AgentType::Claude => "sonnet".to_string(),
+            AgentType::Claude => "opus".to_string(),
             AgentType::Codex => "gpt-5.2-codex".to_string(),
         }
     }

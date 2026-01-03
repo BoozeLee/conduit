@@ -68,31 +68,46 @@ impl ClaudeCodeRunner {
         cmd
     }
 
-    /// Convert Claude-specific event to unified AgentEvent
-    fn convert_event(raw: ClaudeRawEvent) -> Option<AgentEvent> {
+    /// Convert Claude-specific event to unified AgentEvent(s)
+    /// Returns a Vec because Assistant events can contain both text and tool_use blocks
+    fn convert_event(raw: ClaudeRawEvent) -> Vec<AgentEvent> {
         match raw {
             ClaudeRawEvent::System(sys) => {
                 if sys.subtype.as_deref() == Some("init") {
-                    sys.session_id.map(|id| {
-                        AgentEvent::SessionInit(SessionInitEvent {
-                            session_id: SessionId::from_string(id),
-                            model: sys.model,
+                    sys.session_id
+                        .map(|id| {
+                            vec![AgentEvent::SessionInit(SessionInitEvent {
+                                session_id: SessionId::from_string(id),
+                                model: sys.model,
+                            })]
                         })
-                    })
+                        .unwrap_or_default()
                 } else {
-                    None
+                    vec![]
                 }
             }
             ClaudeRawEvent::Assistant(assistant) => {
+                let mut events = Vec::new();
+
+                // Extract text content
                 let text = assistant.extract_text().unwrap_or_default();
-                if text.is_empty() {
-                    None
-                } else {
-                    Some(AgentEvent::AssistantMessage(AssistantMessageEvent {
+                if !text.is_empty() {
+                    events.push(AgentEvent::AssistantMessage(AssistantMessageEvent {
                         text,
                         is_final: true,
-                    }))
+                    }));
                 }
+
+                // Extract embedded tool_use blocks
+                for tool_use in assistant.extract_tool_uses() {
+                    events.push(AgentEvent::ToolStarted(ToolStartedEvent {
+                        tool_name: tool_use.name,
+                        tool_id: tool_use.id,
+                        arguments: tool_use.input,
+                    }));
+                }
+
+                events
             }
             ClaudeRawEvent::ToolUse(tool) => {
                 let tool_name = tool.tool.or(tool.name).unwrap_or_default();
@@ -104,35 +119,38 @@ impl ClaudeCodeRunner {
                 } else {
                     tool.arguments
                 };
-                Some(AgentEvent::ToolStarted(ToolStartedEvent {
+                vec![AgentEvent::ToolStarted(ToolStartedEvent {
                     tool_name,
                     tool_id,
                     arguments,
-                }))
+                })]
             }
             ClaudeRawEvent::ToolResult(result) => {
                 let tool_id = result.tool_use_id.unwrap_or_default();
                 let is_error = result.is_error.unwrap_or(false);
-                Some(AgentEvent::ToolCompleted(ToolCompletedEvent {
+                vec![AgentEvent::ToolCompleted(ToolCompletedEvent {
                     tool_id,
                     success: !is_error,
                     result: if !is_error { result.content.clone() } else { None },
                     error: if is_error { result.content } else { None },
-                }))
+                })]
             }
             ClaudeRawEvent::Result(res) => {
                 // Result event always signals turn completion
                 // Use default values if usage is not provided
-                let usage = res.usage.map(|u| TokenUsage {
-                    input_tokens: u.input_tokens.unwrap_or(0),
-                    output_tokens: u.output_tokens.unwrap_or(0),
-                    cached_tokens: 0,
-                    total_tokens: u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
-                }).unwrap_or_default();
+                let usage = res
+                    .usage
+                    .map(|u| TokenUsage {
+                        input_tokens: u.input_tokens.unwrap_or(0),
+                        output_tokens: u.output_tokens.unwrap_or(0),
+                        cached_tokens: 0,
+                        total_tokens: u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
+                    })
+                    .unwrap_or_default();
 
-                Some(AgentEvent::TurnCompleted(TurnCompletedEvent { usage }))
+                vec![AgentEvent::TurnCompleted(TurnCompletedEvent { usage })]
             }
-            ClaudeRawEvent::Unknown => None,
+            ClaudeRawEvent::Unknown => vec![],
         }
     }
 }
@@ -168,10 +186,10 @@ impl AgentRunner for ClaudeCodeRunner {
             });
 
             // Convert and forward events
-            while let Some(raw_event) = raw_rx.recv().await {
-                if let Some(event) = Self::convert_event(raw_event) {
+            'outer: while let Some(raw_event) = raw_rx.recv().await {
+                for event in Self::convert_event(raw_event) {
                     if tx.send(event).await.is_err() {
-                        break;
+                        break 'outer;
                     }
                 }
             }

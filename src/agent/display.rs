@@ -49,14 +49,7 @@ impl MessageDisplay {
                 args,
                 output,
                 exit_code,
-            } => {
-                let output_with_exit = if let Some(code) = exit_code {
-                    format!("{}\n[exit: {}]", output.trim_end(), code)
-                } else {
-                    output.clone()
-                };
-                ChatMessage::tool(name, args, output_with_exit)
-            }
+            } => ChatMessage::tool_with_exit(name, args, output, *exit_code),
             MessageDisplay::System { content } => ChatMessage::system(content),
             MessageDisplay::Error { content } => ChatMessage::error(content),
         }
@@ -65,13 +58,15 @@ impl MessageDisplay {
     /// Map raw tool names to display names
     pub fn tool_display_name(raw_name: &str) -> &'static str {
         match raw_name {
-            "exec_command" | "shell" | "local_shell_call" | "command_execution" => "Bash",
+            "exec_command" | "shell" | "local_shell_call" | "command_execution" | "Bash" => "Bash",
             "read_file" | "Read" => "Read",
             "write_file" | "Write" => "Write",
             "list_directory" | "LS" => "LS",
             "Glob" => "Glob",
             "Grep" => "Grep",
             "Edit" => "Edit",
+            "TodoWrite" => "TodoWrite",
+            "Task" => "Task",
             _ => "Tool", // Default for unknown names
         }
     }
@@ -79,7 +74,7 @@ impl MessageDisplay {
     /// Map raw tool names to display names, returning owned String for unknown names
     pub fn tool_display_name_owned(raw_name: &str) -> String {
         match raw_name {
-            "exec_command" | "shell" | "local_shell_call" | "command_execution" => {
+            "exec_command" | "shell" | "local_shell_call" | "command_execution" | "Bash" => {
                 "Bash".to_string()
             }
             "read_file" | "Read" => "Read".to_string(),
@@ -88,6 +83,8 @@ impl MessageDisplay {
             "Glob" => "Glob".to_string(),
             "Grep" => "Grep".to_string(),
             "Edit" => "Edit".to_string(),
+            "TodoWrite" => "TodoWrite".to_string(),
+            "Task" => "Task".to_string(),
             _ => raw_name.to_string(), // Pass through unknown names
         }
     }
@@ -206,7 +203,7 @@ error: command failed"#;
             exit_code: Some(0),
         };
         let msg = display.to_chat_message();
-        assert!(msg.content.contains("[exit: 0]"));
+        assert_eq!(msg.exit_code, Some(0));
         assert!(msg.content.contains("file1.txt"));
     }
 
@@ -219,7 +216,7 @@ error: command failed"#;
             exit_code: None,
         };
         let msg = display.to_chat_message();
-        assert!(!msg.content.contains("[exit:"));
+        assert_eq!(msg.exit_code, None);
         assert_eq!(msg.content, "file contents");
     }
 }

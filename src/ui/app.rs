@@ -2538,8 +2538,12 @@ impl App {
         // Capture session state before releasing borrow
         let agent_type = session.agent_type;
         let model = session.model.clone();
-        // Take resume_session_id (clears it after first use)
-        let resume_session_id = session.resume_session_id.take();
+        // Use agent_session_id if available (set by agent after first prompt)
+        // Fall back to resume_session_id only for initial session restoration
+        let session_id_to_use = session
+            .agent_session_id
+            .clone()
+            .or_else(|| session.resume_session_id.take());
         // Use session's working_dir if set, otherwise fall back to config
         let working_dir = session
             .working_dir
@@ -2570,8 +2574,8 @@ impl App {
             config = config.with_model(model_id);
         }
 
-        // Add resume session if restoring from saved state
-        if let Some(session_id) = resume_session_id {
+        // Add session ID to continue existing conversation
+        if let Some(session_id) = session_id_to_use {
             config = config.with_resume(session_id);
         }
 

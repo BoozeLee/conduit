@@ -111,6 +111,14 @@ pub enum ClaudeContentBlock {
     Other,
 }
 
+/// Extracted tool use information from a content block
+#[derive(Debug, Clone)]
+pub struct ExtractedToolUse {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+}
+
 impl ClaudeAssistantEvent {
     /// Extract the text content from this event
     pub fn extract_text(&self) -> Option<String> {
@@ -131,6 +139,26 @@ impl ClaudeAssistantEvent {
         }
         // Fall back to direct text field
         self.text.clone()
+    }
+
+    /// Extract tool_use blocks from this event's content
+    pub fn extract_tool_uses(&self) -> Vec<ExtractedToolUse> {
+        if let Some(ref msg) = self.message {
+            if let Some(ref content) = msg.content {
+                return content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ClaudeContentBlock::ToolUse { id, name, input } => Some(ExtractedToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        }),
+                        _ => None,
+                    })
+                    .collect();
+            }
+        }
+        Vec::new()
     }
 }
 
