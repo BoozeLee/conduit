@@ -24,7 +24,8 @@ use crate::agent::{
     load_claude_history_with_debug, load_codex_history_with_debug, AgentEvent, AgentRunner, AgentStartConfig,
     AgentType, ClaudeCodeRunner, CodexCliRunner, HistoryDebugEntry, MessageDisplay, SessionId,
 };
-use crate::config::Config;
+use crate::config::{Config, KeyCombo, KeyContext};
+use crate::ui::action::Action;
 use crate::data::{
     AppStateDao, Database, Repository, RepositoryDao, SessionTab, SessionTabDao, WorkspaceDao,
 };
@@ -702,229 +703,13 @@ impl App {
     }
 
     async fn handle_key_event(&mut self, key: event::KeyEvent) -> anyhow::Result<()> {
-        // Handle dialog-specific keys FIRST before global shortcuts
-        // This prevents global shortcuts from interfering with dialog navigation
-        if self.input_mode == InputMode::PickingProject
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
-            match key.code {
-                KeyCode::Char('j') => {
-                    self.project_picker_state.select_next();
-                    return Ok(());
-                }
-                KeyCode::Char('k') => {
-                    self.project_picker_state.select_prev();
-                    return Ok(());
-                }
-                KeyCode::Char('f') => {
-                    self.project_picker_state.page_down();
-                    return Ok(());
-                }
-                KeyCode::Char('b') => {
-                    self.project_picker_state.page_up();
-                    return Ok(());
-                }
-                KeyCode::Char('a') => {
-                    // Open custom path dialog
-                    self.project_picker_state.hide();
-                    self.add_repo_dialog_state.show();
-                    self.input_mode = InputMode::AddingRepository;
-                    return Ok(());
-                }
-                _ => {}
-            }
+        // Special handling for modes that bypass normal key processing
+        if self.input_mode == InputMode::RemovingProject {
+            // Ignore all input while removing project
+            return Ok(());
         }
 
-        // Global shortcuts (work in any mode, but skip if already handled by dialog)
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('q') => {
-                    self.save_session_state();
-                    self.should_quit = true;
-                    return Ok(());
-                }
-                KeyCode::Char('p') => {
-                    // Ctrl+P: Open/Create Pull Request
-                    self.handle_pr_action();
-                    return Ok(());
-                }
-                KeyCode::Char('n') => {
-                    // Always trigger new project workflow
-                    let base_dir = self
-                        .app_state_dao
-                        .as_ref()
-                        .and_then(|dao| dao.get("projects_base_dir").ok().flatten());
-
-                    if let Some(base_dir_str) = base_dir {
-                        let base_path = if base_dir_str.starts_with('~') {
-                            dirs::home_dir()
-                                .map(|h| h.join(&base_dir_str[1..].trim_start_matches('/')))
-                                .unwrap_or_else(|| PathBuf::from(&base_dir_str))
-                        } else {
-                            PathBuf::from(&base_dir_str)
-                        };
-                        self.project_picker_state.show(base_path);
-                        self.input_mode = InputMode::PickingProject;
-                    } else {
-                        self.base_dir_dialog_state.show();
-                        self.input_mode = InputMode::SettingBaseDir;
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('w') => {
-                    // Ctrl+W: delete word if input has text, else close tab
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        if !session.input_box.is_empty() {
-                            session.input_box.delete_word_back();
-                            return Ok(());
-                        }
-                    }
-                    let active = self.tab_manager.active_index();
-                    self.tab_manager.close_tab(active);
-                    // Switch to sidebar navigation if all tabs are closed
-                    if self.tab_manager.is_empty() {
-                        self.sidebar_state.visible = true;
-                        self.input_mode = InputMode::SidebarNavigation;
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('c') => {
-                    // Interrupt current agent
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        if session.is_processing {
-                            let display = MessageDisplay::System {
-                                content: "Interrupted".to_string(),
-                            };
-                            session.chat_view.push(display.to_chat_message());
-                            session.stop_processing();
-                            // TODO: Actually kill the agent process
-                        }
-                    }
-                    return Ok(());
-                }
-                // Readline shortcuts
-                KeyCode::Char('a') => {
-                    // Ctrl+A: Move to start of line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.move_start();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('e') => {
-                    // Ctrl+E: Move to end of line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.move_end();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('t') => {
-                    // Ctrl+T: Toggle sidebar
-                    self.sidebar_state.toggle();
-                    if self.sidebar_state.visible {
-                        self.sidebar_state.set_focused(true);
-                        self.input_mode = InputMode::SidebarNavigation;
-
-                        // Focus on the current tab's workspace if it has one
-                        if let Some(session) = self.tab_manager.active_session() {
-                            if let Some(workspace_id) = session.workspace_id {
-                                if let Some(index) = self.sidebar_data.focus_workspace(workspace_id) {
-                                    self.sidebar_state.tree_state.selected = index;
-                                }
-                            }
-                        }
-                    } else {
-                        self.sidebar_state.set_focused(false);
-                        self.input_mode = InputMode::Normal;
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('u') => {
-                    // Ctrl+U: Delete to start of line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.delete_to_start();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('k') => {
-                    // Ctrl+K: Delete to end of line (readline)
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.delete_to_end();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('j') => {
-                    // Ctrl+J: Insert newline (readline)
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.insert_newline();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('b') => {
-                    // Ctrl+B: Move cursor backward (readline)
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.move_left();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('o') => {
-                    // Ctrl+O: Show model selector for current session
-                    if let Some(session) = self.tab_manager.active_session() {
-                        self.model_selector_state.show(session.model.clone());
-                        self.input_mode = InputMode::SelectingModel;
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('f') => {
-                    // Ctrl+F: Move cursor forward (readline)
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.move_right();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('d') => {
-                    // Ctrl+D: Delete character at cursor (same as Delete)
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.delete();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('h') => {
-                    // Ctrl+H: Backspace
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.backspace();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('g') => {
-                    // Ctrl+G: Toggle view mode (Chat <-> RawEvents)
-                    self.view_mode = match self.view_mode {
-                        ViewMode::Chat => ViewMode::RawEvents,
-                        ViewMode::RawEvents => ViewMode::Chat,
-                    };
-                    return Ok(());
-                }
-                KeyCode::Up => {
-                    // Ctrl+Up: Scroll chat up one line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.chat_view.scroll_up(1);
-                    }
-                    self.record_chat_scroll(1);
-                    return Ok(());
-                }
-                KeyCode::Down => {
-                    // Ctrl+Down: Scroll chat down one line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.chat_view.scroll_down(1);
-                    }
-                    self.record_chat_scroll(1);
-                    return Ok(());
-                }
-                _ => {}
-            }
-        }
-
-        // First-time splash screen key handling (only Enter and Esc)
-        // Skip if a dialog is visible - let the dialog handle keys
+        // First-time splash screen handling (only when no dialogs are visible)
         if self.show_first_time_splash
             && key.modifiers.is_empty()
             && !self.base_dir_dialog_state.is_visible()
@@ -935,415 +720,429 @@ impl App {
         {
             match key.code {
                 KeyCode::Enter => {
-                    // Check if base projects directory is set
-                    let base_dir = self
-                        .app_state_dao
-                        .as_ref()
-                        .and_then(|dao| dao.get("projects_base_dir").ok().flatten());
-
-                    if let Some(base_dir_str) = base_dir {
-                        // Base dir exists - show project picker
-                        let base_path = if base_dir_str.starts_with('~') {
-                            dirs::home_dir()
-                                .map(|h| h.join(&base_dir_str[1..].trim_start_matches('/')))
-                                .unwrap_or_else(|| PathBuf::from(&base_dir_str))
-                        } else {
-                            PathBuf::from(&base_dir_str)
-                        };
-                        self.project_picker_state.show(base_path);
-                        self.input_mode = InputMode::PickingProject;
-                    } else {
-                        // No base dir - show setup dialog
-                        self.base_dir_dialog_state.show();
-                        self.input_mode = InputMode::SettingBaseDir;
-                    }
+                    // Start new project workflow
+                    self.execute_action(Action::NewProject).await?;
                     return Ok(());
                 }
                 KeyCode::Esc | KeyCode::Char('q') => {
-                    self.save_session_state();
-                    self.should_quit = true;
+                    self.execute_action(Action::Quit).await?;
                     return Ok(());
                 }
                 _ => {}
             }
         }
 
-        // Alt key shortcuts
-        if key.modifiers.contains(KeyModifiers::ALT) {
-            match key.code {
-                KeyCode::Char('b') => {
-                    // Alt+B: Move cursor back one word
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.move_word_left();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('f') => {
-                    // Alt+F: Move cursor forward one word
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.move_word_right();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('d') => {
-                    // Alt+D: Delete word forward (TODO: implement delete_word_forward)
-                    return Ok(());
-                }
-                KeyCode::Backspace => {
-                    // Alt+Backspace: Delete word back (same as Ctrl+W)
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.delete_word_back();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char(c) if c.is_ascii_digit() => {
-                    // Alt+1-9: Switch to tab N
-                    let tab_num = c.to_digit(10).unwrap_or(0) as usize;
-                    if tab_num > 0 {
-                        self.tab_manager.switch_to(tab_num - 1);
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('p') => {
-                    // Alt+P: Toggle performance metrics display (moved from Ctrl+P)
-                    self.show_metrics = !self.show_metrics;
-                    return Ok(());
-                }
-                KeyCode::Char('g') => {
-                    // Alt+G: Dump debug state to file
-                    self.dump_debug_state();
-                    return Ok(());
-                }
-                KeyCode::Char('J') => {
-                    // Alt+Shift+J: Scroll chat down one line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.chat_view.scroll_down(1);
-                    }
-                    self.record_chat_scroll(1);
-                    return Ok(());
-                }
-                KeyCode::Char('K') => {
-                    // Alt+Shift+K: Scroll chat up one line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.chat_view.scroll_up(1);
-                    }
-                    self.record_chat_scroll(1);
-                    return Ok(());
-                }
-                KeyCode::Char('F') => {
-                    // Alt+Shift+F: Page down in chat
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.chat_view.scroll_down(10);
-                    }
-                    self.record_chat_scroll(10);
-                    return Ok(());
-                }
-                KeyCode::Char('B') => {
-                    // Alt+Shift+B: Page up in chat
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.chat_view.scroll_up(10);
-                    }
-                    self.record_chat_scroll(10);
-                    return Ok(());
-                }
-                _ => {}
-            }
+        // Get the current context from input mode and view mode
+        let context = KeyContext::from_input_mode(self.input_mode, self.view_mode);
+
+        // Text input (typing characters) handled specially
+        if self.should_handle_as_text_input(&key, context) {
+            self.handle_text_input(key);
+            return Ok(());
         }
 
-        match self.input_mode {
-            InputMode::SelectingAgent => {
-                match key.code {
-                    KeyCode::Enter => {
-                        let agent_type = self.agent_selector_state.selected_agent();
-                        self.agent_selector_state.hide();
-                        self.create_tab_with_agent(agent_type);
+        // Convert key event to KeyCombo for lookup
+        let key_combo = KeyCombo::from_key_event(&key);
+
+        // Look up action in config (context-specific first, then global)
+        if let Some(action) = self.config.keybindings.get_action(&key_combo, context) {
+            self.execute_action(action.clone()).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Execute a keybinding action
+    async fn execute_action(&mut self, action: Action) -> anyhow::Result<()> {
+        match action {
+            // ========== Global Actions ==========
+            Action::Quit => {
+                self.save_session_state();
+                self.should_quit = true;
+            }
+            Action::ToggleSidebar => {
+                self.sidebar_state.toggle();
+                if self.sidebar_state.visible {
+                    self.sidebar_state.set_focused(true);
+                    self.input_mode = InputMode::SidebarNavigation;
+                    // Focus on the current tab's workspace if it has one
+                    if let Some(session) = self.tab_manager.active_session() {
+                        if let Some(workspace_id) = session.workspace_id {
+                            if let Some(index) = self.sidebar_data.focus_workspace(workspace_id) {
+                                self.sidebar_state.tree_state.selected = index;
+                            }
+                        }
                     }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        self.agent_selector_state.select_previous();
+                } else {
+                    self.sidebar_state.set_focused(false);
+                    self.input_mode = InputMode::Normal;
+                }
+            }
+            Action::NewProject => {
+                let base_dir = self
+                    .app_state_dao
+                    .as_ref()
+                    .and_then(|dao| dao.get("projects_base_dir").ok().flatten());
+
+                if let Some(base_dir_str) = base_dir {
+                    let base_path = if base_dir_str.starts_with('~') {
+                        dirs::home_dir()
+                            .map(|h| h.join(&base_dir_str[1..].trim_start_matches('/')))
+                            .unwrap_or_else(|| PathBuf::from(&base_dir_str))
+                    } else {
+                        PathBuf::from(&base_dir_str)
+                    };
+                    self.project_picker_state.show(base_path);
+                    self.input_mode = InputMode::PickingProject;
+                } else {
+                    self.base_dir_dialog_state.show();
+                    self.input_mode = InputMode::SettingBaseDir;
+                }
+            }
+            Action::OpenPr => {
+                self.handle_pr_action();
+            }
+            Action::InterruptAgent => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    if session.is_processing {
+                        let display = MessageDisplay::System {
+                            content: "Interrupted".to_string(),
+                        };
+                        session.chat_view.push(display.to_chat_message());
+                        session.stop_processing();
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
+                }
+            }
+            Action::ToggleViewMode => {
+                self.view_mode = match self.view_mode {
+                    ViewMode::Chat => ViewMode::RawEvents,
+                    ViewMode::RawEvents => ViewMode::Chat,
+                };
+            }
+            Action::ShowModelSelector => {
+                if let Some(session) = self.tab_manager.active_session() {
+                    self.model_selector_state.show(session.model.clone());
+                    self.input_mode = InputMode::SelectingModel;
+                }
+            }
+            Action::ToggleMetrics => {
+                self.show_metrics = !self.show_metrics;
+            }
+            Action::DumpDebugState => {
+                self.dump_debug_state();
+            }
+
+            // ========== Tab Management ==========
+            Action::CloseTab => {
+                let active = self.tab_manager.active_index();
+                self.tab_manager.close_tab(active);
+                if self.tab_manager.is_empty() {
+                    self.sidebar_state.visible = true;
+                    self.input_mode = InputMode::SidebarNavigation;
+                }
+            }
+            Action::NextTab => {
+                self.tab_manager.next_tab();
+            }
+            Action::PrevTab => {
+                self.tab_manager.prev_tab();
+            }
+            Action::SwitchToTab(n) => {
+                if n > 0 {
+                    self.tab_manager.switch_to((n - 1) as usize);
+                }
+            }
+
+            // ========== Chat Scrolling ==========
+            Action::ScrollUp(n) => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.chat_view.scroll_up(n as usize);
+                }
+                self.record_chat_scroll(n as usize);
+            }
+            Action::ScrollDown(n) => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.chat_view.scroll_down(n as usize);
+                }
+                self.record_chat_scroll(n as usize);
+            }
+            Action::ScrollPageUp => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.chat_view.scroll_up(10);
+                }
+                self.record_chat_scroll(10);
+            }
+            Action::ScrollPageDown => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.chat_view.scroll_down(10);
+                }
+                self.record_chat_scroll(10);
+            }
+            Action::ScrollToTop => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.chat_view.scroll_to_top();
+                }
+            }
+            Action::ScrollToBottom => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.chat_view.scroll_to_bottom();
+                }
+            }
+
+            // ========== Input Box Editing ==========
+            Action::InsertNewline => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.insert_newline();
+                }
+            }
+            Action::Backspace => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.backspace();
+                }
+            }
+            Action::Delete => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.delete();
+                }
+            }
+            Action::DeleteWordBack => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.delete_word_back();
+                }
+            }
+            Action::DeleteWordForward => {
+                // TODO: implement delete_word_forward in InputBox
+            }
+            Action::DeleteToStart => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.delete_to_start();
+                }
+            }
+            Action::DeleteToEnd => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.delete_to_end();
+                }
+            }
+            Action::MoveCursorLeft => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.move_left();
+                }
+            }
+            Action::MoveCursorRight => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.move_right();
+                }
+            }
+            Action::MoveCursorStart => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.move_start();
+                }
+            }
+            Action::MoveCursorEnd => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.move_end();
+                }
+            }
+            Action::MoveWordLeft => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.move_word_left();
+                }
+            }
+            Action::MoveWordRight => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.move_word_right();
+                }
+            }
+            Action::MoveCursorUp => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    if !session.input_box.move_up() {
+                        if session.input_box.is_cursor_on_first_line() {
+                            session.input_box.history_prev();
+                        }
+                    }
+                }
+            }
+            Action::MoveCursorDown => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    if !session.input_box.move_down() {
+                        if session.input_box.is_cursor_on_last_line() {
+                            session.input_box.history_next();
+                        }
+                    }
+                }
+            }
+            Action::HistoryPrev => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.history_prev();
+                }
+            }
+            Action::HistoryNext => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.history_next();
+                }
+            }
+            Action::Submit => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    if !session.input_box.is_empty() {
+                        let prompt = session.input_box.submit();
+                        self.submit_prompt(prompt).await?;
+                    }
+                }
+            }
+
+            // ========== List/Tree Navigation ==========
+            Action::SelectNext => {
+                match self.input_mode {
+                    InputMode::SidebarNavigation => {
+                        let visible_count = self.sidebar_data.visible_nodes().len();
+                        self.sidebar_state.tree_state.select_next(visible_count);
+                    }
+                    InputMode::SelectingModel => {
+                        self.model_selector_state.select_next();
+                    }
+                    InputMode::SelectingAgent => {
                         self.agent_selector_state.select_next();
                     }
-                    KeyCode::Esc => {
-                        self.agent_selector_state.hide();
-                        self.input_mode = InputMode::Normal;
+                    InputMode::PickingProject => {
+                        self.project_picker_state.select_next();
                     }
                     _ => {}
                 }
             }
-            InputMode::Normal => {
-                if let Some(session) = self.tab_manager.active_session_mut() {
-                    match key.code {
-                        KeyCode::Enter => {
-                            if self.view_mode == ViewMode::RawEvents {
-                                // Toggle expand in raw events view
-                                session.raw_events_view.toggle_expand();
-                            } else if key.modifiers.contains(KeyModifiers::SHIFT)
-                                || key.modifiers.contains(KeyModifiers::SUPER)
-                                || key.modifiers.contains(KeyModifiers::META)
-                            {
-                                // Shift+Enter, Cmd+Enter, or Meta+Enter: insert newline
-                                session.input_box.insert_newline();
-                            } else if !session.input_box.is_empty() {
-                                let prompt = session.input_box.submit();
-                                self.submit_prompt(prompt).await?;
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            session.input_box.backspace();
-                        }
-                        KeyCode::Delete => {
-                            session.input_box.delete();
-                        }
-                        KeyCode::Left => {
-                            session.input_box.move_left();
-                        }
-                        KeyCode::Right => {
-                            session.input_box.move_right();
-                        }
-                        KeyCode::Home => {
-                            session.input_box.move_start();
-                        }
-                        KeyCode::End => {
-                            session.input_box.move_end();
-                        }
-                        KeyCode::Up => {
-                            if self.view_mode == ViewMode::RawEvents {
-                                // Navigate selection in raw events view
-                                session.raw_events_view.select_prev();
-                            } else {
-                                // Try to move up in multi-line input
-                                // If can't move (single line or at top), try history
-                                if !session.input_box.move_up() {
-                                    if session.input_box.is_cursor_on_first_line() {
-                                        session.input_box.history_prev();
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Down => {
-                            if self.view_mode == ViewMode::RawEvents {
-                                // Navigate selection in raw events view
-                                session.raw_events_view.select_next();
-                            } else {
-                                // Try to move down in multi-line input
-                                // If can't move (single line or at bottom), try history
-                                if !session.input_box.move_down() {
-                                    if session.input_box.is_cursor_on_last_line() {
-                                        session.input_box.history_next();
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::PageUp => {
-                            session.chat_view.scroll_up(10);
-                            self.record_chat_scroll(10);
-                        }
-                        KeyCode::PageDown => {
-                            session.chat_view.scroll_down(10);
-                            self.record_chat_scroll(10);
-                        }
-                        KeyCode::Tab => {
-                            if self.view_mode == ViewMode::RawEvents {
-                                // Toggle expand in raw events view
-                                session.raw_events_view.toggle_expand();
-                            } else if session.input_box.is_empty() {
-                                // Cycle: tabs -> sidebar (if visible) -> tabs
-                                let is_last_tab = self.tab_manager.active_index()
-                                    == self.tab_manager.len().saturating_sub(1);
-                                if is_last_tab && self.sidebar_state.visible {
-                                    // Go to sidebar (only if it's visible)
-                                    self.sidebar_state.set_focused(true);
-                                    self.input_mode = InputMode::SidebarNavigation;
-                                } else {
-                                    self.tab_manager.next_tab();
-                                }
-                            }
-                        }
-                        KeyCode::BackTab => {
-                            if session.input_box.is_empty() {
-                                // Cycle backwards: sidebar (if visible) -> tabs
-                                let is_first_tab = self.tab_manager.active_index() == 0;
-                                if is_first_tab && self.sidebar_state.visible {
-                                    // Go to sidebar (only if it's visible)
-                                    self.sidebar_state.set_focused(true);
-                                    self.input_mode = InputMode::SidebarNavigation;
-                                } else {
-                                    self.tab_manager.prev_tab();
-                                }
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            if self.view_mode == ViewMode::RawEvents {
-                                // Vim-style navigation in raw events view
-                                match c {
-                                    'j' => session.raw_events_view.select_next(),
-                                    'k' => session.raw_events_view.select_prev(),
-                                    'l' => session.raw_events_view.toggle_expand(),
-                                    'h' => session.raw_events_view.collapse(),
-                                    _ => {}
-                                }
-                            } else {
-                                session.input_box.insert_char(c);
-                            }
-                        }
-                        KeyCode::Esc => {
-                            if self.view_mode == ViewMode::RawEvents {
-                                // Collapse expanded event in raw events view
-                                session.raw_events_view.collapse();
-                            } else {
-                                session.chat_view.scroll_to_bottom();
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            InputMode::Scrolling => {
-                if let Some(session) = self.tab_manager.active_session_mut() {
-                    match key.code {
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            session.chat_view.scroll_up(1);
-                            self.record_chat_scroll(1);
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            session.chat_view.scroll_down(1);
-                            self.record_chat_scroll(1);
-                        }
-                        KeyCode::PageUp => {
-                            session.chat_view.scroll_up(10);
-                            self.record_chat_scroll(10);
-                        }
-                        KeyCode::PageDown => {
-                            session.chat_view.scroll_down(10);
-                            self.record_chat_scroll(10);
-                        }
-                        KeyCode::Home | KeyCode::Char('g') => {
-                            session.chat_view.scroll_to_top();
-                        }
-                        KeyCode::End | KeyCode::Char('G') => {
-                            session.chat_view.scroll_to_bottom();
-                        }
-                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => {
-                            self.input_mode = InputMode::Normal;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            InputMode::SidebarNavigation => {
-                let visible_count = self.sidebar_data.visible_nodes().len();
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
+            Action::SelectPrev => {
+                match self.input_mode {
+                    InputMode::SidebarNavigation => {
+                        let visible_count = self.sidebar_data.visible_nodes().len();
                         self.sidebar_state.tree_state.select_previous(visible_count);
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        self.sidebar_state.tree_state.select_next(visible_count);
+                    InputMode::SelectingModel => {
+                        self.model_selector_state.select_previous();
                     }
-                    KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                    InputMode::SelectingAgent => {
+                        self.agent_selector_state.select_previous();
+                    }
+                    InputMode::PickingProject => {
+                        self.project_picker_state.select_prev();
+                    }
+                    _ => {}
+                }
+            }
+            Action::SelectPageDown => {
+                if self.input_mode == InputMode::PickingProject {
+                    self.project_picker_state.page_down();
+                }
+            }
+            Action::SelectPageUp => {
+                if self.input_mode == InputMode::PickingProject {
+                    self.project_picker_state.page_up();
+                }
+            }
+            Action::Confirm => {
+                match self.input_mode {
+                    InputMode::SidebarNavigation => {
                         let selected = self.sidebar_state.tree_state.selected;
                         if let Some(node) = self.sidebar_data.get_at(selected) {
                             use crate::ui::components::{ActionType, NodeType};
                             match node.node_type {
                                 NodeType::Action(ActionType::NewWorkspace) => {
-                                    // Create new workspace under parent repo
                                     if let Some(parent_id) = node.parent_id {
                                         self.start_workspace_creation(parent_id);
                                     }
                                 }
                                 NodeType::Workspace => {
-                                    // Open workspace
                                     self.open_workspace(node.id);
                                     self.input_mode = InputMode::Normal;
                                     self.sidebar_state.set_focused(false);
                                 }
                                 NodeType::Repository => {
-                                    // Toggle expand
                                     self.sidebar_data.toggle_at(selected);
                                 }
                             }
                         }
                     }
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        // Collapse current node
-                        let selected = self.sidebar_state.tree_state.selected;
-                        if let Some(node) = self.sidebar_data.get_at(selected) {
-                            if !node.is_leaf() && node.expanded {
-                                self.sidebar_data.toggle_at(selected);
+                    InputMode::SelectingModel => {
+                        if let Some(model) = self.model_selector_state.selected_model() {
+                            let model_id = model.id.clone();
+                            let agent_type = model.agent_type;
+                            let display_name = model.display_name.clone();
+                            if let Some(session) = self.tab_manager.active_session_mut() {
+                                let agent_changed = session.agent_type != agent_type;
+                                session.model = Some(model_id.clone());
+                                session.agent_type = agent_type;
+                                session.update_status();
+                                let msg = if agent_changed {
+                                    format!("Switched to {} with model: {}", agent_type, display_name)
+                                } else {
+                                    format!("Model changed to: {}", display_name)
+                                };
+                                let display = MessageDisplay::System { content: msg };
+                                session.chat_view.push(display.to_chat_message());
                             }
                         }
-                    }
-                    KeyCode::Esc => {
+                        self.model_selector_state.hide();
                         self.input_mode = InputMode::Normal;
-                        self.sidebar_state.set_focused(false);
                     }
-                    KeyCode::Tab => {
-                        // Cycle to first tab
-                        self.tab_manager.switch_to(0);
-                        self.input_mode = InputMode::Normal;
-                        self.sidebar_state.set_focused(false);
+                    InputMode::SelectingAgent => {
+                        let agent_type = self.agent_selector_state.selected_agent();
+                        self.agent_selector_state.hide();
+                        self.create_tab_with_agent(agent_type);
                     }
-                    KeyCode::BackTab => {
-                        // Cycle backwards to last tab
-                        let last_tab = self.tab_manager.len().saturating_sub(1);
-                        self.tab_manager.switch_to(last_tab);
-                        self.input_mode = InputMode::Normal;
-                        self.sidebar_state.set_focused(false);
-                    }
-                    KeyCode::Char('r') => {
-                        // Add repository from sidebar
-                        self.add_repo_dialog_state.show();
-                        self.input_mode = InputMode::AddingRepository;
-                    }
-                    KeyCode::Char('s') => {
-                        // Open settings - change base projects directory
-                        if let Some(dao) = &self.app_state_dao {
-                            if let Ok(Some(current_dir)) = dao.get("projects_base_dir") {
-                                self.base_dir_dialog_state.show_with_path(&current_dir);
+                    InputMode::PickingProject => {
+                        if let Some(project) = self.project_picker_state.selected_project() {
+                            let repo_id = self.add_project_to_sidebar(project.path.clone());
+                            self.project_picker_state.hide();
+                            if let Some(id) = repo_id {
+                                self.sidebar_data.expand_repo(id);
+                                if let Some(repo_index) = self.sidebar_data.find_repo_index(id) {
+                                    self.sidebar_state.tree_state.selected = repo_index + 1;
+                                }
+                                self.sidebar_state.show();
+                                self.sidebar_state.set_focused(true);
+                                self.show_first_time_splash = false;
+                                self.input_mode = InputMode::SidebarNavigation;
                             } else {
-                                self.base_dir_dialog_state.show();
-                            }
-                        } else {
-                            self.base_dir_dialog_state.show();
-                        }
-                        self.input_mode = InputMode::SettingBaseDir;
-                    }
-                    KeyCode::Char('x') => {
-                        // Archive workspace or remove project (based on selected node type)
-                        let selected = self.sidebar_state.tree_state.selected;
-                        if let Some(node) = self.sidebar_data.get_at(selected) {
-                            use crate::ui::components::NodeType;
-                            match node.node_type {
-                                NodeType::Workspace => {
-                                    self.initiate_archive_workspace(node.id);
-                                }
-                                NodeType::Repository => {
-                                    self.initiate_remove_project(node.id);
-                                }
-                                _ => {}
+                                self.input_mode = InputMode::Normal;
                             }
                         }
                     }
-                    _ => {}
-                }
-            }
-            InputMode::Confirming => {
-                // When loading, only allow Esc to cancel
-                if self.confirmation_dialog_state.loading {
-                    if key.code == KeyCode::Esc {
-                        self.confirmation_dialog_state.hide();
-                        self.input_mode = InputMode::Normal;
+                    InputMode::AddingRepository => {
+                        if self.add_repo_dialog_state.is_valid {
+                            let repo_id = self.add_repository();
+                            self.add_repo_dialog_state.hide();
+                            if let Some(id) = repo_id {
+                                self.sidebar_data.expand_repo(id);
+                                if let Some(repo_index) = self.sidebar_data.find_repo_index(id) {
+                                    self.sidebar_state.tree_state.selected = repo_index + 1;
+                                }
+                                self.sidebar_state.show();
+                                self.sidebar_state.set_focused(true);
+                                self.show_first_time_splash = false;
+                                self.input_mode = InputMode::SidebarNavigation;
+                            } else {
+                                self.input_mode = InputMode::Normal;
+                            }
+                        }
                     }
-                    return Ok(());
-                }
-
-                match key.code {
-                    KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                        self.confirmation_dialog_state.toggle_selection();
+                    InputMode::SettingBaseDir => {
+                        if self.base_dir_dialog_state.is_valid {
+                            if let Some(dao) = &self.app_state_dao {
+                                if let Err(e) = dao.set("projects_base_dir", self.base_dir_dialog_state.input()) {
+                                    self.base_dir_dialog_state.hide();
+                                    self.show_error(
+                                        "Failed to Save",
+                                        &format!("Could not save projects directory: {}", e),
+                                    );
+                                    return Ok(());
+                                }
+                            }
+                            let base_path = self.base_dir_dialog_state.expanded_path();
+                            self.base_dir_dialog_state.hide();
+                            self.project_picker_state.show(base_path);
+                            self.input_mode = InputMode::PickingProject;
+                        }
                     }
-                    KeyCode::Enter => {
+                    InputMode::Confirming => {
                         if self.confirmation_dialog_state.is_confirm_selected() {
-                            // Execute the confirmed action based on context type
                             if let Some(context) = self.confirmation_dialog_state.context.clone() {
                                 match context {
                                     ConfirmationContext::ArchiveWorkspace(id) => {
@@ -1358,11 +1157,7 @@ impl App {
                                         self.input_mode = InputMode::SidebarNavigation;
                                         return Ok(());
                                     }
-                                    ConfirmationContext::CreatePullRequest {
-                                        tab_index: _,
-                                        working_dir: _,
-                                        preflight,
-                                    } => {
+                                    ConfirmationContext::CreatePullRequest { preflight, .. } => {
                                         self.confirmation_dialog_state.hide();
                                         self.input_mode = InputMode::Normal;
                                         self.submit_pr_workflow(preflight).await?;
@@ -1374,9 +1169,41 @@ impl App {
                         self.confirmation_dialog_state.hide();
                         self.input_mode = InputMode::SidebarNavigation;
                     }
-                    KeyCode::Esc => {
+                    InputMode::ShowingError => {
+                        self.error_dialog_state.hide();
+                        self.input_mode = InputMode::Normal;
+                    }
+                    _ => {}
+                }
+            }
+            Action::Cancel => {
+                match self.input_mode {
+                    InputMode::SidebarNavigation => {
+                        self.input_mode = InputMode::Normal;
+                        self.sidebar_state.set_focused(false);
+                    }
+                    InputMode::SelectingModel => {
+                        self.model_selector_state.hide();
+                        self.input_mode = InputMode::Normal;
+                    }
+                    InputMode::SelectingAgent => {
+                        self.agent_selector_state.hide();
+                        self.input_mode = InputMode::Normal;
+                    }
+                    InputMode::PickingProject => {
+                        self.project_picker_state.hide();
+                        self.input_mode = InputMode::Normal;
+                    }
+                    InputMode::AddingRepository => {
+                        self.add_repo_dialog_state.hide();
+                        self.input_mode = InputMode::Normal;
+                    }
+                    InputMode::SettingBaseDir => {
+                        self.base_dir_dialog_state.hide();
+                        self.input_mode = InputMode::Normal;
+                    }
+                    InputMode::Confirming => {
                         self.confirmation_dialog_state.hide();
-                        // Return to appropriate mode based on context
                         if matches!(
                             self.confirmation_dialog_state.context,
                             Some(ConfirmationContext::CreatePullRequest { .. })
@@ -1386,266 +1213,235 @@ impl App {
                             self.input_mode = InputMode::SidebarNavigation;
                         }
                     }
-                    KeyCode::Char('n') => {
-                        self.confirmation_dialog_state.hide();
-                        self.input_mode = InputMode::SidebarNavigation;
-                    }
-                    KeyCode::Char('y') => {
-                        // Quick confirm
-                        if let Some(context) = self.confirmation_dialog_state.context.clone() {
-                            match context {
-                                ConfirmationContext::ArchiveWorkspace(id) => {
-                                    self.execute_archive_workspace(id);
-                                    self.confirmation_dialog_state.hide();
-                                    self.input_mode = InputMode::SidebarNavigation;
-                                    return Ok(());
-                                }
-                                ConfirmationContext::RemoveProject(id) => {
-                                    self.execute_remove_project(id);
-                                    self.confirmation_dialog_state.hide();
-                                    self.input_mode = InputMode::SidebarNavigation;
-                                    return Ok(());
-                                }
-                                ConfirmationContext::CreatePullRequest {
-                                    tab_index: _,
-                                    working_dir: _,
-                                    preflight,
-                                } => {
-                                    self.confirmation_dialog_state.hide();
-                                    self.input_mode = InputMode::Normal;
-                                    self.submit_pr_workflow(preflight).await?;
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        self.confirmation_dialog_state.hide();
-                        self.input_mode = InputMode::SidebarNavigation;
-                    }
-                    _ => {}
-                }
-            }
-            InputMode::ShowingError => {
-                match key.code {
-                    KeyCode::Enter | KeyCode::Esc => {
+                    InputMode::ShowingError => {
                         self.error_dialog_state.hide();
                         self.input_mode = InputMode::Normal;
                     }
-                    KeyCode::Char('d') => {
-                        self.error_dialog_state.toggle_details();
+                    InputMode::Scrolling => {
+                        self.input_mode = InputMode::Normal;
                     }
                     _ => {}
                 }
             }
-            InputMode::AddingRepository => {
-                match key.code {
-                    KeyCode::Enter => {
-                        if self.add_repo_dialog_state.is_valid {
-                            let repo_id = self.add_repository();
-                            self.add_repo_dialog_state.hide();
-
-                            // If repo was created, expand and select it
-                            if let Some(id) = repo_id {
-                                self.sidebar_data.expand_repo(id);
-                                // Select the "+ New workspace" action (index 1 if repo is at 0)
-                                if let Some(repo_index) = self.sidebar_data.find_repo_index(id) {
-                                    // Action is first child of expanded repo, so repo_index + 1
-                                    self.sidebar_state.tree_state.selected = repo_index + 1;
+            Action::ExpandOrSelect => {
+                // Same as Confirm for sidebar
+                if self.input_mode == InputMode::SidebarNavigation {
+                    let selected = self.sidebar_state.tree_state.selected;
+                    if let Some(node) = self.sidebar_data.get_at(selected) {
+                        use crate::ui::components::{ActionType, NodeType};
+                        match node.node_type {
+                            NodeType::Action(ActionType::NewWorkspace) => {
+                                if let Some(parent_id) = node.parent_id {
+                                    self.start_workspace_creation(parent_id);
                                 }
-                                self.sidebar_state.show();
-                                self.sidebar_state.set_focused(true);
-                                // No longer first-time, we have a project now
-                                self.show_first_time_splash = false;
-                                self.input_mode = InputMode::SidebarNavigation;
-                            } else {
+                            }
+                            NodeType::Workspace => {
+                                self.open_workspace(node.id);
                                 self.input_mode = InputMode::Normal;
+                                self.sidebar_state.set_focused(false);
+                            }
+                            NodeType::Repository => {
+                                self.sidebar_data.toggle_at(selected);
                             }
                         }
                     }
-                    KeyCode::Esc => {
-                        self.add_repo_dialog_state.hide();
-                        self.input_mode = InputMode::Normal;
-                    }
-                    KeyCode::Backspace => {
-                        self.add_repo_dialog_state.delete_char();
-                    }
-                    KeyCode::Delete => {
-                        self.add_repo_dialog_state.delete_forward();
-                    }
-                    KeyCode::Left => {
-                        self.add_repo_dialog_state.move_left();
-                    }
-                    KeyCode::Right => {
-                        self.add_repo_dialog_state.move_right();
-                    }
-                    KeyCode::Home => {
-                        self.add_repo_dialog_state.move_start();
-                    }
-                    KeyCode::End => {
-                        self.add_repo_dialog_state.move_end();
-                    }
-                    KeyCode::Char(c) => {
-                        self.add_repo_dialog_state.insert_char(c);
-                    }
-                    _ => {}
                 }
             }
-            InputMode::SelectingModel => {
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        self.model_selector_state.select_previous();
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        self.model_selector_state.select_next();
-                    }
-                    KeyCode::Enter => {
-                        if let Some(model) = self.model_selector_state.selected_model() {
-                            let model_id = model.id.clone();
-                            let agent_type = model.agent_type;
-                            let display_name = model.display_name.clone();
-                            // Update session's model and agent type
-                            if let Some(session) = self.tab_manager.active_session_mut() {
-                                let agent_changed = session.agent_type != agent_type;
-                                session.model = Some(model_id.clone());
-                                session.agent_type = agent_type;
-                                // Update the status bar
-                                session.update_status();
-                                let msg = if agent_changed {
-                                    format!("Switched to {} with model: {}", agent_type, display_name)
-                                } else {
-                                    format!("Model changed to: {}", display_name)
-                                };
-                                let display = MessageDisplay::System { content: msg };
-                                session.chat_view.push(display.to_chat_message());
-                            }
+            Action::Collapse => {
+                if self.input_mode == InputMode::SidebarNavigation {
+                    let selected = self.sidebar_state.tree_state.selected;
+                    if let Some(node) = self.sidebar_data.get_at(selected) {
+                        if !node.is_leaf() && node.expanded {
+                            self.sidebar_data.toggle_at(selected);
                         }
-                        self.model_selector_state.hide();
-                        self.input_mode = InputMode::Normal;
                     }
-                    KeyCode::Esc => {
-                        self.model_selector_state.hide();
-                        self.input_mode = InputMode::Normal;
-                    }
-                    _ => {}
                 }
             }
-            InputMode::SettingBaseDir => {
-                match key.code {
-                    KeyCode::Enter => {
-                        if self.base_dir_dialog_state.is_valid {
-                            // Save base directory to app_state
-                            if let Some(dao) = &self.app_state_dao {
-                                if let Err(e) = dao.set("projects_base_dir", self.base_dir_dialog_state.input()) {
-                                    self.base_dir_dialog_state.hide();
-                                    self.show_error(
-                                        "Failed to Save",
-                                        &format!("Could not save projects directory: {}", e),
-                                    );
-                                    return Ok(());
-                                }
-                            }
-                            // Show project picker
-                            let base_path = self.base_dir_dialog_state.expanded_path();
-                            self.base_dir_dialog_state.hide();
-                            self.project_picker_state.show(base_path);
-                            self.input_mode = InputMode::PickingProject;
-                        }
+            Action::AddRepository => {
+                match self.input_mode {
+                    InputMode::SidebarNavigation => {
+                        self.add_repo_dialog_state.show();
+                        self.input_mode = InputMode::AddingRepository;
                     }
-                    KeyCode::Esc => {
-                        self.base_dir_dialog_state.hide();
-                        self.input_mode = InputMode::Normal;
-                    }
-                    KeyCode::Backspace => {
-                        self.base_dir_dialog_state.delete_char();
-                    }
-                    KeyCode::Delete => {
-                        self.base_dir_dialog_state.delete_forward();
-                    }
-                    KeyCode::Left => {
-                        self.base_dir_dialog_state.move_left();
-                    }
-                    KeyCode::Right => {
-                        self.base_dir_dialog_state.move_right();
-                    }
-                    KeyCode::Home => {
-                        self.base_dir_dialog_state.move_start();
-                    }
-                    KeyCode::End => {
-                        self.base_dir_dialog_state.move_end();
-                    }
-                    KeyCode::Char(c) => {
-                        self.base_dir_dialog_state.insert_char(c);
-                    }
-                    _ => {}
-                }
-            }
-            InputMode::PickingProject => {
-                match key.code {
-                    KeyCode::Enter => {
-                        // Select the current project and add it to sidebar
-                        if let Some(project) = self.project_picker_state.selected_project() {
-                            let repo_id = self.add_project_to_sidebar(project.path.clone());
-                            self.project_picker_state.hide();
-
-                            // If repo was created, expand and select it
-                            if let Some(id) = repo_id {
-                                self.sidebar_data.expand_repo(id);
-                                // Select the "+ New workspace" action (index 1 if repo is at 0)
-                                if let Some(repo_index) = self.sidebar_data.find_repo_index(id) {
-                                    // Action is first child of expanded repo, so repo_index + 1
-                                    self.sidebar_state.tree_state.selected = repo_index + 1;
-                                }
-                                self.sidebar_state.show();
-                                self.sidebar_state.set_focused(true);
-                                // No longer first-time, we have a project now
-                                self.show_first_time_splash = false;
-                                self.input_mode = InputMode::SidebarNavigation;
-                            } else {
-                                self.input_mode = InputMode::Normal;
-                            }
-                        }
-                    }
-                    KeyCode::Esc => {
+                    InputMode::PickingProject => {
                         self.project_picker_state.hide();
-                        self.input_mode = InputMode::Normal;
-                    }
-                    KeyCode::Up => {
-                        self.project_picker_state.select_prev();
-                    }
-                    KeyCode::Down => {
-                        self.project_picker_state.select_next();
-                    }
-                    KeyCode::Backspace => {
-                        self.project_picker_state.delete_char();
-                    }
-                    KeyCode::Delete => {
-                        self.project_picker_state.delete_forward();
-                    }
-                    KeyCode::Left => {
-                        self.project_picker_state.move_cursor_left();
-                    }
-                    KeyCode::Right => {
-                        self.project_picker_state.move_cursor_right();
-                    }
-                    KeyCode::Home => {
-                        self.project_picker_state.move_cursor_start();
-                    }
-                    KeyCode::End => {
-                        self.project_picker_state.move_cursor_end();
-                    }
-                    KeyCode::Char(c) => {
-                        // Note: Ctrl+A/J/K/F/B are handled at the top of handle_key_event
-                        // before global shortcuts to prevent bubbling
-                        self.project_picker_state.insert_char(c);
+                        self.add_repo_dialog_state.show();
+                        self.input_mode = InputMode::AddingRepository;
                     }
                     _ => {}
                 }
             }
-            InputMode::RemovingProject => {
-                // Ignore all input while removing project (spinner is shown)
+            Action::OpenSettings => {
+                if self.input_mode == InputMode::SidebarNavigation {
+                    if let Some(dao) = &self.app_state_dao {
+                        if let Ok(Some(current_dir)) = dao.get("projects_base_dir") {
+                            self.base_dir_dialog_state.show_with_path(&current_dir);
+                        } else {
+                            self.base_dir_dialog_state.show();
+                        }
+                    } else {
+                        self.base_dir_dialog_state.show();
+                    }
+                    self.input_mode = InputMode::SettingBaseDir;
+                }
+            }
+            Action::ArchiveOrRemove => {
+                if self.input_mode == InputMode::SidebarNavigation {
+                    let selected = self.sidebar_state.tree_state.selected;
+                    if let Some(node) = self.sidebar_data.get_at(selected) {
+                        use crate::ui::components::NodeType;
+                        match node.node_type {
+                            NodeType::Workspace => {
+                                self.initiate_archive_workspace(node.id);
+                            }
+                            NodeType::Repository => {
+                                self.initiate_remove_project(node.id);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            // ========== Sidebar Navigation ==========
+            Action::EnterSidebarMode => {
+                self.sidebar_state.show();
+                self.sidebar_state.set_focused(true);
+                self.input_mode = InputMode::SidebarNavigation;
+            }
+            Action::ExitSidebarMode => {
+                self.sidebar_state.set_focused(false);
+                self.input_mode = InputMode::Normal;
+            }
+
+            // ========== Raw Events View ==========
+            Action::RawEventsSelectNext => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.raw_events_view.select_next();
+                }
+            }
+            Action::RawEventsSelectPrev => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.raw_events_view.select_prev();
+                }
+            }
+            Action::RawEventsToggleExpand => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.raw_events_view.toggle_expand();
+                }
+            }
+            Action::RawEventsCollapse => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.raw_events_view.collapse();
+                }
+            }
+
+            // ========== Confirmation Dialog ==========
+            Action::ConfirmYes => {
+                if self.input_mode == InputMode::Confirming {
+                    if let Some(context) = self.confirmation_dialog_state.context.clone() {
+                        match context {
+                            ConfirmationContext::ArchiveWorkspace(id) => {
+                                self.execute_archive_workspace(id);
+                                self.confirmation_dialog_state.hide();
+                                self.input_mode = InputMode::SidebarNavigation;
+                            }
+                            ConfirmationContext::RemoveProject(id) => {
+                                self.execute_remove_project(id);
+                                self.confirmation_dialog_state.hide();
+                                self.input_mode = InputMode::SidebarNavigation;
+                            }
+                            ConfirmationContext::CreatePullRequest { preflight, .. } => {
+                                self.confirmation_dialog_state.hide();
+                                self.input_mode = InputMode::Normal;
+                                self.submit_pr_workflow(preflight).await?;
+                            }
+                        }
+                    }
+                }
+            }
+            Action::ConfirmNo => {
+                if self.input_mode == InputMode::Confirming {
+                    self.confirmation_dialog_state.hide();
+                    self.input_mode = InputMode::SidebarNavigation;
+                }
+            }
+            Action::ConfirmToggle => {
+                if self.input_mode == InputMode::Confirming {
+                    self.confirmation_dialog_state.toggle_selection();
+                }
+            }
+            Action::ToggleDetails => {
+                if self.input_mode == InputMode::ShowingError {
+                    self.error_dialog_state.toggle_details();
+                }
+            }
+
+            // ========== Agent Selection ==========
+            Action::SelectAgent => {
+                if self.input_mode == InputMode::SelectingAgent {
+                    let agent_type = self.agent_selector_state.selected_agent();
+                    self.agent_selector_state.hide();
+                    self.create_tab_with_agent(agent_type);
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Check if a key event should be handled as text input
+    /// Returns true if the key is a printable character without Control/Alt modifiers
+    /// and we're in a text-input context
+    fn should_handle_as_text_input(&self, key: &event::KeyEvent, context: KeyContext) -> bool {
+        // Only handle plain characters (no Ctrl or Alt)
+        let has_modifier = key.modifiers.contains(KeyModifiers::CONTROL)
+            || key.modifiers.contains(KeyModifiers::ALT);
+
+        if has_modifier {
+            return false;
+        }
+
+        // Check if this is a character key
+        let is_char = matches!(key.code, KeyCode::Char(_));
+
+        if !is_char {
+            return false;
+        }
+
+        // Only treat as text input in appropriate contexts
+        matches!(
+            context,
+            KeyContext::Chat
+                | KeyContext::AddRepository
+                | KeyContext::BaseDir
+                | KeyContext::ProjectPicker
+        )
+    }
+
+    /// Handle text input for text-input contexts
+    fn handle_text_input(&mut self, key: event::KeyEvent) {
+        let KeyCode::Char(c) = key.code else {
+            return;
+        };
+
+        match self.input_mode {
+            InputMode::Normal => {
+                if let Some(session) = self.tab_manager.active_session_mut() {
+                    session.input_box.insert_char(c);
+                }
+            }
+            InputMode::AddingRepository => {
+                self.add_repo_dialog_state.insert_char(c);
+            }
+            InputMode::SettingBaseDir => {
+                self.base_dir_dialog_state.insert_char(c);
+            }
+            InputMode::PickingProject => {
+                self.project_picker_state.insert_char(c);
+            }
+            _ => {}
+        }
     }
 
     /// Open a workspace (create or switch to tab)
