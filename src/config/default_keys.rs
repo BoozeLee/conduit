@@ -209,5 +209,27 @@ pub fn default_keybindings() -> KeybindingConfig {
     raw.insert(KeyCombo::new(KeyCode::Tab, KeyModifiers::NONE), Action::RawEventsToggleExpand);
     raw.insert(KeyCombo::new(KeyCode::Esc, KeyModifiers::NONE), Action::RawEventsCollapse);
 
+    // ========== Command Mode ==========
+    let command = config.context.entry(KeyContext::Command).or_default();
+
+    command.insert(KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE), Action::ExecuteCommand);
+    command.insert(KeyCombo::new(KeyCode::Esc, KeyModifiers::NONE), Action::Cancel);
+    command.insert(KeyCombo::new(KeyCode::Backspace, KeyModifiers::NONE), Action::Backspace);
+
+    // ========== Help Dialog ==========
+    let help = config.context.entry(KeyContext::HelpDialog).or_default();
+
+    help.insert(KeyCombo::new(KeyCode::Esc, KeyModifiers::NONE), Action::Cancel);
+    bind(help, "q", Action::Cancel);
+    help.insert(KeyCombo::new(KeyCode::Up, KeyModifiers::NONE), Action::ScrollUp(1));
+    help.insert(KeyCombo::new(KeyCode::Down, KeyModifiers::NONE), Action::ScrollDown(1));
+    bind(help, "k", Action::ScrollUp(1));
+    bind(help, "j", Action::ScrollDown(1));
+    help.insert(KeyCombo::new(KeyCode::PageUp, KeyModifiers::NONE), Action::ScrollPageUp);
+    help.insert(KeyCombo::new(KeyCode::PageDown, KeyModifiers::NONE), Action::ScrollPageDown);
+    bind(help, "C-b", Action::ScrollPageUp);
+    bind(help, "C-f", Action::ScrollPageDown);
+    help.insert(KeyCombo::new(KeyCode::Backspace, KeyModifiers::NONE), Action::Backspace);
+
     config
 }

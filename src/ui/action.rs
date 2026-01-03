@@ -144,6 +144,12 @@ pub enum Action {
     // ========== Agent Selection ==========
     /// Confirm agent selection
     SelectAgent,
+
+    // ========== Command Mode ==========
+    /// Show help dialog
+    ShowHelp,
+    /// Execute command in command mode
+    ExecuteCommand,
 }
 
 impl Action {
@@ -226,6 +232,10 @@ impl Action {
 
             // Agent
             Action::SelectAgent => "Select agent",
+
+            // Command mode
+            Action::ShowHelp => "Show help",
+            Action::ExecuteCommand => "Execute command",
         }
     }
 }
