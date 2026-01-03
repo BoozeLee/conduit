@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod display;
 pub mod error;
 pub mod events;
 pub mod history;
@@ -10,6 +11,7 @@ pub mod stream;
 
 pub use claude::ClaudeCodeRunner;
 pub use codex::CodexCliRunner;
+pub use display::MessageDisplay;
 pub use error::AgentError;
 pub use events::*;
 pub use history::{load_claude_history, load_codex_history_with_debug, HistoryDebugEntry, HistoryError};

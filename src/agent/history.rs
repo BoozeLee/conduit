@@ -11,7 +11,10 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::ui::components::{ChatMessage, MessageRole};
+use super::display::MessageDisplay;
+use crate::ui::components::ChatMessage;
+#[cfg(test)]
+use crate::ui::components::MessageRole;
 
 /// Info extracted from a function_call entry for later lookup
 struct FunctionCallInfo {
@@ -129,14 +132,10 @@ fn convert_claude_entry(entry: &Value) -> Option<ChatMessage> {
             // User message: {"type":"user","message":{"role":"user","content":"..."}}
             let message = entry.get("message")?;
             let content = message.get("content")?.as_str()?;
-            Some(ChatMessage {
-                role: MessageRole::User,
+            let display = MessageDisplay::User {
                 content: content.to_string(),
-                tool_name: None,
-                tool_args: None,
-                is_streaming: false,
-                summary: None,
-            })
+            };
+            Some(display.to_chat_message())
         }
         "assistant" => {
             // Assistant message: {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"..."}]}}
@@ -172,14 +171,11 @@ fn convert_claude_entry(entry: &Value) -> Option<ChatMessage> {
                 return None;
             }
 
-            Some(ChatMessage {
-                role: MessageRole::Assistant,
+            let display = MessageDisplay::Assistant {
                 content: text,
-                tool_name: None,
-                tool_args: None,
                 is_streaming: false,
-                summary: None,
-            })
+            };
+            Some(display.to_chat_message())
         }
         _ => None, // Skip queue-operation and other types
     }
@@ -387,24 +383,39 @@ fn convert_codex_entry_with_debug(
 
             // Handle function_call_output (tool results)
             if payload_type == Some("function_call_output") {
-                if let Some(output) = payload.get("output").and_then(|o| o.as_str()) {
+                if let Some(raw_output) = payload.get("output").and_then(|o| o.as_str()) {
                     let call_id = payload
                         .get("call_id")
                         .and_then(|c| c.as_str())
                         .unwrap_or("unknown");
 
                     // Look up the function call to get the command
-                    let (tool_name, tool_args) = if let Some(info) = function_calls.get(call_id) {
-                        (info.name.clone(), info.command.clone())
+                    let (raw_name, command) = if let Some(info) = function_calls.get(call_id) {
+                        (info.name.as_str(), info.command.clone())
                     } else {
-                        ("shell".to_string(), call_id.to_string())
+                        ("shell", call_id.to_string())
                     };
 
-                    let preview = truncate_preview(output, 60);
+                    // Parse Codex metadata wrapper to get clean output and exit code
+                    let (output, exit_code) = MessageDisplay::parse_codex_tool_output(raw_output);
+
+                    let display = MessageDisplay::Tool {
+                        name: MessageDisplay::tool_display_name_owned(raw_name),
+                        args: command.clone(),
+                        output,
+                        exit_code,
+                    };
+
+                    let preview = truncate_preview(raw_output, 60);
                     return (
-                        Some(ChatMessage::tool(&tool_name, &tool_args, output)),
+                        Some(display.to_chat_message()),
                         "INCLUDE",
-                        format!("{}({}): \"{}\"", tool_name, truncate_preview(&tool_args, 30), preview),
+                        format!(
+                            "{}({}): \"{}\"",
+                            MessageDisplay::tool_display_name(raw_name),
+                            truncate_preview(&command, 30),
+                            preview
+                        ),
                     );
                 }
             }
@@ -433,13 +444,20 @@ fn convert_codex_entry_with_debug(
             }
 
             let preview = truncate_preview(&text, 60);
-            let msg = match role {
-                "user" => ChatMessage::user(text),
-                "assistant" => ChatMessage::assistant(text),
+            let display = match role {
+                "user" => MessageDisplay::User { content: text },
+                "assistant" => MessageDisplay::Assistant {
+                    content: text,
+                    is_streaming: false,
+                },
                 _ => return (None, "SKIP", format!("unknown role: {}", role)),
             };
 
-            (Some(msg), "INCLUDE", format!("role={}: \"{}\"", role, preview))
+            (
+                Some(display.to_chat_message()),
+                "INCLUDE",
+                format!("role={}: \"{}\"", role, preview),
+            )
         }
 
         _ => (None, "SKIP", format!("type={}", entry_type)),
@@ -592,9 +610,10 @@ mod tests {
         assert_eq!(status, "INCLUDE");
         let msg = msg.unwrap();
         assert_eq!(msg.role, MessageRole::Tool);
-        assert_eq!(msg.tool_name, Some("exec_command".to_string()));
+        // Tool name is now mapped: exec_command -> Bash
+        assert_eq!(msg.tool_name, Some("Bash".to_string()));
         assert_eq!(msg.tool_args, Some("git log -1 --stat".to_string()));
-        assert!(reason.contains("exec_command"));
+        assert!(reason.contains("Bash"));
         assert!(reason.contains("git log"));
     }
 

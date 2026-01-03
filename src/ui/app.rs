@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::{
     load_claude_history, load_codex_history_with_debug, AgentEvent, AgentRunner, AgentStartConfig,
-    AgentType, ClaudeCodeRunner, CodexCliRunner, HistoryDebugEntry, SessionId,
+    AgentType, ClaudeCodeRunner, CodexCliRunner, HistoryDebugEntry, MessageDisplay, SessionId,
 };
 use crate::config::Config;
 use crate::data::{
@@ -579,7 +579,10 @@ impl App {
                     // Interrupt current agent
                     if let Some(session) = self.tab_manager.active_session_mut() {
                         if session.is_processing {
-                            session.chat_view.push(ChatMessage::system("Interrupted"));
+                            let display = MessageDisplay::System {
+                                content: "Interrupted".to_string(),
+                            };
+                            session.chat_view.push(display.to_chat_message());
                             session.stop_processing();
                             // TODO: Actually kill the agent process
                         }
@@ -1160,17 +1163,13 @@ impl App {
                                 session.agent_type = agent_type;
                                 // Update the status bar
                                 session.update_status();
-                                if agent_changed {
-                                    session.chat_view.push(ChatMessage::system(format!(
-                                        "Switched to {} with model: {}",
-                                        agent_type, display_name
-                                    )));
+                                let msg = if agent_changed {
+                                    format!("Switched to {} with model: {}", agent_type, display_name)
                                 } else {
-                                    session.chat_view.push(ChatMessage::system(format!(
-                                        "Model changed to: {}",
-                                        display_name
-                                    )));
-                                }
+                                    format!("Model changed to: {}", display_name)
+                                };
+                                let display = MessageDisplay::System { content: msg };
+                                session.chat_view.push(display.to_chat_message());
                             }
                         }
                         self.model_selector_state.hide();
@@ -2340,7 +2339,10 @@ impl App {
                 // Interrupt
                 if let Some(session) = self.tab_manager.active_session_mut() {
                     if session.is_processing {
-                        session.chat_view.push(ChatMessage::system("Interrupted"));
+                        let display = MessageDisplay::System {
+                            content: "Interrupted".to_string(),
+                        };
+                        session.chat_view.push(display.to_chat_message());
                         session.stop_processing();
                     }
                 }
@@ -2372,7 +2374,8 @@ impl App {
             }
             AppEvent::Error(msg) => {
                 if let Some(session) = self.tab_manager.active_session_mut() {
-                    session.chat_view.push(ChatMessage::error(msg));
+                    let display = MessageDisplay::Error { content: msg };
+                    session.chat_view.push(display.to_chat_message());
                     session.stop_processing();
                 }
             }
@@ -2415,7 +2418,10 @@ impl App {
             }
             AgentEvent::TurnFailed(failed) => {
                 session.stop_processing();
-                session.chat_view.push(ChatMessage::error(failed.error));
+                let display = MessageDisplay::Error {
+                    content: failed.error,
+                };
+                session.chat_view.push(display.to_chat_message());
             }
             AgentEvent::AssistantMessage(msg) => {
                 // Track streaming tokens (rough estimate: ~4 chars per token)
@@ -2423,7 +2429,11 @@ impl App {
                 session.add_streaming_tokens(token_estimate);
 
                 if msg.is_final {
-                    session.chat_view.push(ChatMessage::assistant(msg.text));
+                    let display = MessageDisplay::Assistant {
+                        content: msg.text,
+                        is_streaming: false,
+                    };
+                    session.chat_view.push(display.to_chat_message());
                 } else {
                     session.chat_view.stream_append(&msg.text);
                 }
@@ -2438,11 +2448,13 @@ impl App {
                     // Compact single-line for display
                     serde_json::to_string(&tool.arguments).unwrap_or_default()
                 };
-                session.chat_view.push(ChatMessage::tool(
-                    &tool.tool_name,
-                    args_str,
-                    "Running...",
-                ));
+                let display = MessageDisplay::Tool {
+                    name: MessageDisplay::tool_display_name_owned(&tool.tool_name),
+                    args: args_str,
+                    output: "Running...".to_string(),
+                    exit_code: None,
+                };
+                session.chat_view.push(display.to_chat_message());
             }
             AgentEvent::ToolCompleted(tool) => {
                 // Return to thinking state
@@ -2450,8 +2462,11 @@ impl App {
 
                 // Track file changes for write/edit tools
                 if tool.success {
-                    let tool_name = tool.tool_id.to_lowercase();
-                    if tool_name.contains("edit") || tool_name.contains("write") || tool_name.contains("multiedit") {
+                    let tool_name_lower = tool.tool_id.to_lowercase();
+                    if tool_name_lower.contains("edit")
+                        || tool_name_lower.contains("write")
+                        || tool_name_lower.contains("multiedit")
+                    {
                         // Try to extract filename from result or use generic name
                         if let Some(ref result) = tool.result {
                             // Simple heuristic: look for file paths in result
@@ -2463,31 +2478,33 @@ impl App {
                     }
                 }
 
-                let content = if tool.success {
+                let output = if tool.success {
                     tool.result.unwrap_or_else(|| "Completed".to_string())
                 } else {
                     format!("Error: {}", tool.error.unwrap_or_default())
                 };
-                session
-                    .chat_view
-                    .push(ChatMessage::tool(&tool.tool_id, "", content));
+                let display = MessageDisplay::Tool {
+                    name: MessageDisplay::tool_display_name_owned(&tool.tool_id),
+                    args: String::new(),
+                    output,
+                    exit_code: None,
+                };
+                session.chat_view.push(display.to_chat_message());
             }
             AgentEvent::CommandOutput(cmd) => {
-                let output = format!(
-                    "{}{}",
-                    cmd.output,
-                    cmd.exit_code
-                        .map(|c| format!("\n[exit: {}]", c))
-                        .unwrap_or_default()
-                );
-                session.chat_view.push(ChatMessage::tool(
-                    "Bash",
-                    &cmd.command,
-                    output,
-                ));
+                let display = MessageDisplay::Tool {
+                    name: "Bash".to_string(),
+                    args: cmd.command.clone(),
+                    output: cmd.output.clone(),
+                    exit_code: cmd.exit_code,
+                };
+                session.chat_view.push(display.to_chat_message());
             }
             AgentEvent::Error(err) => {
-                session.chat_view.push(ChatMessage::error(err.message));
+                let display = MessageDisplay::Error {
+                    content: err.message,
+                };
+                session.chat_view.push(display.to_chat_message());
                 if err.is_fatal {
                     session.stop_processing();
                 }
@@ -2512,7 +2529,10 @@ impl App {
         );
 
         // Add user message to chat
-        session.chat_view.push(ChatMessage::user(&prompt));
+        let display = MessageDisplay::User {
+            content: prompt.clone(),
+        };
+        session.chat_view.push(display.to_chat_message());
         session.start_processing();
 
         // Capture session state before releasing borrow
@@ -2529,10 +2549,13 @@ impl App {
         // Validate working directory exists
         if !working_dir.exists() {
             if let Some(session) = self.tab_manager.active_session_mut() {
-                session.chat_view.push(ChatMessage::error(format!(
-                    "Working directory does not exist: {}",
-                    working_dir.display()
-                )));
+                let display = MessageDisplay::Error {
+                    content: format!(
+                        "Working directory does not exist: {}",
+                        working_dir.display()
+                    ),
+                };
+                session.chat_view.push(display.to_chat_message());
                 session.stop_processing();
             }
             return Ok(());
@@ -2953,10 +2976,10 @@ impl App {
 
         // Show confirmation in chat
         if let Some(session) = self.tab_manager.active_session_mut() {
-            session.chat_view.push(ChatMessage::system(format!(
-                "Debug state dumped to: {}",
-                filename
-            )));
+            let display = MessageDisplay::System {
+                content: format!("Debug state dumped to: {}", filename),
+            };
+            session.chat_view.push(display.to_chat_message());
         }
 
         Ok(())
