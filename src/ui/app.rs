@@ -817,29 +817,8 @@ impl App {
                     }
                     return Ok(());
                 }
-                KeyCode::Char('u') => {
-                    // Ctrl+U: Delete to start of line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.delete_to_start();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('k') => {
-                    // Ctrl+K: Delete to end of line
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.delete_to_end();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('j') => {
-                    // Ctrl+J: Insert newline
-                    if let Some(session) = self.tab_manager.active_session_mut() {
-                        session.input_box.insert_newline();
-                    }
-                    return Ok(());
-                }
-                KeyCode::Char('b') => {
-                    // Ctrl+B: Toggle sidebar
+                KeyCode::Char('\\') => {
+                    // Ctrl+\: Toggle sidebar
                     self.sidebar_state.toggle();
                     if self.sidebar_state.visible {
                         self.sidebar_state.set_focused(true);
@@ -859,6 +838,34 @@ impl App {
                     }
                     return Ok(());
                 }
+                KeyCode::Char('u') => {
+                    // Ctrl+U: Delete to start of line
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.input_box.delete_to_start();
+                    }
+                    return Ok(());
+                }
+                KeyCode::Char('k') => {
+                    // Ctrl+K: Delete to end of line (readline)
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.input_box.delete_to_end();
+                    }
+                    return Ok(());
+                }
+                KeyCode::Char('j') => {
+                    // Ctrl+J: Insert newline (readline)
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.input_box.insert_newline();
+                    }
+                    return Ok(());
+                }
+                KeyCode::Char('b') => {
+                    // Ctrl+B: Move cursor backward (readline)
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.input_box.move_left();
+                    }
+                    return Ok(());
+                }
                 KeyCode::Char('o') => {
                     // Ctrl+O: Show model selector for current session
                     if let Some(session) = self.tab_manager.active_session() {
@@ -868,7 +875,7 @@ impl App {
                     return Ok(());
                 }
                 KeyCode::Char('f') => {
-                    // Ctrl+F: Move cursor forward (same as Right)
+                    // Ctrl+F: Move cursor forward (readline)
                     if let Some(session) = self.tab_manager.active_session_mut() {
                         session.input_box.move_right();
                     }
@@ -894,6 +901,22 @@ impl App {
                         ViewMode::Chat => ViewMode::RawEvents,
                         ViewMode::RawEvents => ViewMode::Chat,
                     };
+                    return Ok(());
+                }
+                KeyCode::Up => {
+                    // Ctrl+Up: Scroll chat up one line
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_up(1);
+                    }
+                    self.record_chat_scroll(1);
+                    return Ok(());
+                }
+                KeyCode::Down => {
+                    // Ctrl+Down: Scroll chat down one line
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_down(1);
+                    }
+                    self.record_chat_scroll(1);
                     return Ok(());
                 }
                 _ => {}
@@ -989,6 +1012,38 @@ impl App {
                 KeyCode::Char('g') => {
                     // Alt+G: Dump debug state to file
                     self.dump_debug_state();
+                    return Ok(());
+                }
+                KeyCode::Char('J') => {
+                    // Alt+Shift+J: Scroll chat down one line
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_down(1);
+                    }
+                    self.record_chat_scroll(1);
+                    return Ok(());
+                }
+                KeyCode::Char('K') => {
+                    // Alt+Shift+K: Scroll chat up one line
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_up(1);
+                    }
+                    self.record_chat_scroll(1);
+                    return Ok(());
+                }
+                KeyCode::Char('F') => {
+                    // Alt+Shift+F: Page down in chat
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_down(10);
+                    }
+                    self.record_chat_scroll(10);
+                    return Ok(());
+                }
+                KeyCode::Char('B') => {
+                    // Alt+Shift+B: Page up in chat
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_up(10);
+                    }
+                    self.record_chat_scroll(10);
                     return Ok(());
                 }
                 _ => {}

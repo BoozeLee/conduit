@@ -19,10 +19,10 @@ impl GlobalFooter {
         Self {
             hints: vec![
                 ("Tab", "Switch"),
+                ("C-\\", "Sidebar"),
                 ("C-n", "Project"),
                 ("C-w", "Close"),
                 ("C-c", "Stop"),
-                ("C-g", "Debug"),
                 ("C-q", "Quit"),
             ],
             view_mode: ViewMode::Chat,
@@ -35,10 +35,10 @@ impl GlobalFooter {
         self.hints = match view_mode {
             ViewMode::Chat => vec![
                 ("Tab", "Switch"),
+                ("C-\\", "Sidebar"),
                 ("C-n", "Project"),
                 ("C-w", "Close"),
                 ("C-c", "Stop"),
-                ("C-g", "Debug"),
                 ("C-q", "Quit"),
             ],
             ViewMode::RawEvents => vec![
