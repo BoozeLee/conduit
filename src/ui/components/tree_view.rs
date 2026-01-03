@@ -430,4 +430,26 @@ impl SidebarData {
             .map(|node| node.id)
             .collect()
     }
+
+    /// Find and focus on a workspace by its ID.
+    /// Expands the parent repository and returns the visible index of the workspace.
+    pub fn focus_workspace(&mut self, workspace_id: Uuid) -> Option<usize> {
+        // First, find which repository contains this workspace and expand it
+        for node in &mut self.nodes {
+            if node.node_type == NodeType::Repository {
+                for child in &node.children {
+                    if child.id == workspace_id && child.node_type == NodeType::Workspace {
+                        // Found the workspace - expand its parent
+                        node.expanded = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Now find the visible index of the workspace
+        self.visible_nodes()
+            .iter()
+            .position(|node| node.id == workspace_id && node.node_type == NodeType::Workspace)
+    }
 }

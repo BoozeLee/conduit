@@ -832,6 +832,15 @@ impl App {
                     if self.sidebar_state.visible {
                         self.sidebar_state.set_focused(true);
                         self.input_mode = InputMode::SidebarNavigation;
+
+                        // Focus on the current tab's workspace if it has one
+                        if let Some(session) = self.tab_manager.active_session() {
+                            if let Some(workspace_id) = session.workspace_id {
+                                if let Some(index) = self.sidebar_data.focus_workspace(workspace_id) {
+                                    self.sidebar_state.tree_state.selected = index;
+                                }
+                            }
+                        }
                     } else {
                         self.sidebar_state.set_focused(false);
                         self.input_mode = InputMode::Normal;
