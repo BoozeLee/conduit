@@ -25,10 +25,23 @@ impl KeyCombo {
     }
 
     /// Create a KeyCombo from a crossterm KeyEvent
+    ///
+    /// This normalizes the key event to match the canonical form used by config parsing:
+    /// - Uppercase characters are converted to lowercase + SHIFT modifier
+    /// - This ensures "G" in config matches Shift+g key events
     pub fn from_key_event(event: &crossterm::event::KeyEvent) -> Self {
-        Self {
-            code: event.code,
-            modifiers: event.modifiers,
+        match event.code {
+            KeyCode::Char(c) if c.is_ascii_uppercase() => {
+                // Normalize uppercase to lowercase + SHIFT
+                Self {
+                    code: KeyCode::Char(c.to_ascii_lowercase()),
+                    modifiers: event.modifiers | KeyModifiers::SHIFT,
+                }
+            }
+            _ => Self {
+                code: event.code,
+                modifiers: event.modifiers,
+            },
         }
     }
 }
@@ -248,7 +261,12 @@ pub fn parse_key_notation(s: &str) -> Result<KeyCombo, KeyParseError> {
     }
 
     let key_str = key_part.ok_or(KeyParseError::NoKey)?;
-    let code = parse_key_code(key_str)?;
+    let (code, needs_shift) = parse_key_code(key_str)?;
+
+    // Add SHIFT modifier if the key was uppercase (e.g., "G" -> lowercase g + SHIFT)
+    if needs_shift {
+        modifiers |= KeyModifiers::SHIFT;
+    }
 
     Ok(KeyCombo::new(code, modifiers))
 }
@@ -308,24 +326,26 @@ fn parse_special_key(s: &str) -> Result<KeyCombo, KeyParseError> {
 }
 
 /// Parse a single key code (not a special key)
-fn parse_key_code(s: &str) -> Result<KeyCode, KeyParseError> {
+/// Returns the KeyCode and whether SHIFT should be added (for uppercase chars)
+fn parse_key_code(s: &str) -> Result<(KeyCode, bool), KeyParseError> {
     if s.len() == 1 {
         let c = s.chars().next().unwrap();
-        Ok(KeyCode::Char(c.to_ascii_lowercase()))
+        let needs_shift = c.is_ascii_uppercase();
+        Ok((KeyCode::Char(c.to_ascii_lowercase()), needs_shift))
     } else if s.starts_with('<') && s.ends_with('>') {
         // Handle special keys without modifiers
         let key = parse_special_key(s)?;
-        Ok(key.code)
+        Ok((key.code, false))
     } else if s == "\\" {
-        Ok(KeyCode::Char('\\'))
+        Ok((KeyCode::Char('\\'), false))
     } else {
         // Try parsing as a special key name without brackets
         match s.to_uppercase().as_str() {
-            "SPACE" => Ok(KeyCode::Char(' ')),
-            "TAB" => Ok(KeyCode::Tab),
-            "ENTER" | "CR" | "RETURN" => Ok(KeyCode::Enter),
-            "ESC" | "ESCAPE" => Ok(KeyCode::Esc),
-            "BS" | "BACKSPACE" => Ok(KeyCode::Backspace),
+            "SPACE" => Ok((KeyCode::Char(' '), false)),
+            "TAB" => Ok((KeyCode::Tab, false)),
+            "ENTER" | "CR" | "RETURN" => Ok((KeyCode::Enter, false)),
+            "ESC" | "ESCAPE" => Ok((KeyCode::Esc, false)),
+            "BS" | "BACKSPACE" => Ok((KeyCode::Backspace, false)),
             _ => Err(KeyParseError::InvalidKey(s.to_string())),
         }
     }
@@ -438,5 +458,141 @@ mod tests {
 
         let key = KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(key.to_string(), "<CR>");
+    }
+
+    #[test]
+    fn test_parse_uppercase_key() {
+        // "G" should parse as lowercase 'g' with SHIFT modifier
+        let key = parse_key_notation("G").unwrap();
+        assert_eq!(key.code, KeyCode::Char('g'));
+        assert_eq!(key.modifiers, KeyModifiers::SHIFT);
+
+        // "g" should have no SHIFT modifier
+        let key = parse_key_notation("g").unwrap();
+        assert_eq!(key.code, KeyCode::Char('g'));
+        assert_eq!(key.modifiers, KeyModifiers::NONE);
+
+        // "G" and "g" should now be different
+        let upper = parse_key_notation("G").unwrap();
+        let lower = parse_key_notation("g").unwrap();
+        assert_ne!(upper, lower);
+    }
+
+    #[test]
+    fn test_from_key_event_normalizes_uppercase() {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+
+        // Simulate Shift+g key event (uppercase G with SHIFT)
+        let event = KeyEvent {
+            code: KeyCode::Char('G'),
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let combo = KeyCombo::from_key_event(&event);
+
+        // Should normalize to lowercase 'g' with SHIFT
+        assert_eq!(combo.code, KeyCode::Char('g'));
+        assert!(combo.modifiers.contains(KeyModifiers::SHIFT));
+
+        // Should now match the parsed "G" notation
+        let parsed = parse_key_notation("G").unwrap();
+        assert_eq!(combo, parsed);
+    }
+
+    #[test]
+    fn test_from_key_event_preserves_lowercase() {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+
+        // Lowercase 'g' without shift should remain unchanged
+        let event = KeyEvent {
+            code: KeyCode::Char('g'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let combo = KeyCombo::from_key_event(&event);
+
+        assert_eq!(combo.code, KeyCode::Char('g'));
+        assert_eq!(combo.modifiers, KeyModifiers::NONE);
+
+        // Should match parsed "g"
+        let parsed = parse_key_notation("g").unwrap();
+        assert_eq!(combo, parsed);
+    }
+
+    #[test]
+    fn test_from_key_event_mixed_modifiers() {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+
+        // Ctrl+Shift+G (uppercase with CTRL and SHIFT)
+        let event = KeyEvent {
+            code: KeyCode::Char('G'),
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let combo = KeyCombo::from_key_event(&event);
+
+        // Should normalize to lowercase 'g' but preserve all modifiers
+        assert_eq!(combo.code, KeyCode::Char('g'));
+        assert!(combo.modifiers.contains(KeyModifiers::CONTROL));
+        assert!(combo.modifiers.contains(KeyModifiers::SHIFT));
+
+        // Should match parsed "C-S-g" (note: C-S-G would also work)
+        let parsed = parse_key_notation("C-S-g").unwrap();
+        assert_eq!(combo, parsed);
+    }
+
+    #[test]
+    fn test_from_key_event_alt_shift_uppercase() {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+
+        // Alt+Shift+J (uppercase J with ALT and SHIFT)
+        let event = KeyEvent {
+            code: KeyCode::Char('J'),
+            modifiers: KeyModifiers::ALT | KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let combo = KeyCombo::from_key_event(&event);
+
+        // Should normalize to lowercase 'j' with ALT and SHIFT preserved
+        assert_eq!(combo.code, KeyCode::Char('j'));
+        assert!(combo.modifiers.contains(KeyModifiers::ALT));
+        assert!(combo.modifiers.contains(KeyModifiers::SHIFT));
+
+        // Should match the M-S-j binding from default_keys.rs
+        let parsed = parse_key_notation("M-S-j").unwrap();
+        assert_eq!(combo, parsed);
+    }
+
+    #[test]
+    fn test_from_key_event_non_char_keys_unchanged() {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+
+        // Special keys should pass through unchanged
+        let event = KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let combo = KeyCombo::from_key_event(&event);
+
+        assert_eq!(combo.code, KeyCode::Enter);
+        assert_eq!(combo.modifiers, KeyModifiers::CONTROL);
+
+        // Arrow keys
+        let event = KeyEvent {
+            code: KeyCode::Up,
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let combo = KeyCombo::from_key_event(&event);
+
+        assert_eq!(combo.code, KeyCode::Up);
+        assert_eq!(combo.modifiers, KeyModifiers::SHIFT);
     }
 }

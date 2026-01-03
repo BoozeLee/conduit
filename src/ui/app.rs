@@ -24,7 +24,7 @@ use crate::agent::{
     load_claude_history_with_debug, load_codex_history_with_debug, AgentEvent, AgentRunner, AgentStartConfig,
     AgentType, ClaudeCodeRunner, CodexCliRunner, HistoryDebugEntry, MessageDisplay, SessionId,
 };
-use crate::config::{Config, KeyCombo, KeyContext};
+use crate::config::{parse_key_notation, Config, KeyCombo, KeyContext};
 use crate::ui::action::Action;
 use crate::data::{
     AppStateDao, Database, Repository, RepositoryDao, SessionTab, SessionTabDao, WorkspaceDao,
@@ -648,7 +648,9 @@ impl App {
                                             &mut pending_scroll_up,
                                             &mut pending_scroll_down,
                                         );
-                                        self.handle_mouse_event(mouse);
+                                        if let Some(action) = self.handle_mouse_event(mouse) {
+                                            self.execute_action(action).await?;
+                                        }
                                     }
                                 }
                             }
@@ -2197,7 +2199,7 @@ impl App {
         *pending_down = 0;
     }
 
-    fn handle_mouse_event(&mut self, mouse: event::MouseEvent) {
+    fn handle_mouse_event(&mut self, mouse: event::MouseEvent) -> Option<Action> {
         let x = mouse.column;
         let y = mouse.row;
 
@@ -2212,6 +2214,7 @@ impl App {
                     session.chat_view.scroll_up(1);
                     self.record_chat_scroll(1);
                 }
+                None
             }
             MouseEventKind::ScrollDown => {
                 // Route scroll to project picker if it's visible
@@ -2223,30 +2226,32 @@ impl App {
                     session.chat_view.scroll_down(1);
                     self.record_chat_scroll(1);
                 }
+                None
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 // Handle left clicks based on position
-                self.handle_mouse_click(x, y);
+                self.handle_mouse_click(x, y)
             }
-            _ => {}
+            _ => None,
         }
     }
 
     /// Handle a mouse click at the given position
-    fn handle_mouse_click(&mut self, x: u16, y: u16) {
+    /// Returns an action to execute if the click triggered one
+    fn handle_mouse_click(&mut self, x: u16, y: u16) -> Option<Action> {
         // Handle project picker clicks first (it's a modal dialog)
         if self.input_mode == InputMode::PickingProject
             && self.project_picker_state.is_visible()
         {
             self.handle_project_picker_click(x, y);
-            return;
+            return None;
         }
 
         // Check sidebar first (if visible)
         if let Some(sidebar_area) = self.sidebar_area {
             if Self::point_in_rect(x, y, sidebar_area) {
                 self.handle_sidebar_click(x, y, sidebar_area);
-                return;
+                return None;
             }
         }
 
@@ -2254,7 +2259,7 @@ impl App {
         if let Some(tab_bar_area) = self.tab_bar_area {
             if Self::point_in_rect(x, y, tab_bar_area) {
                 self.handle_tab_bar_click(x, y, tab_bar_area);
-                return;
+                return None;
             }
         }
 
@@ -2262,7 +2267,7 @@ impl App {
         if let Some(input_area) = self.input_area {
             if Self::point_in_rect(x, y, input_area) {
                 self.handle_input_click(x, y, input_area);
-                return;
+                return None;
             }
         }
 
@@ -2270,15 +2275,14 @@ impl App {
         if let Some(status_bar_area) = self.status_bar_area {
             if Self::point_in_rect(x, y, status_bar_area) {
                 self.handle_status_bar_click(x, y, status_bar_area);
-                return;
+                return None;
             }
         }
 
         // Check footer
         if let Some(footer_area) = self.footer_area {
             if Self::point_in_rect(x, y, footer_area) {
-                self.handle_footer_click(x, y, footer_area);
-                return;
+                return self.handle_footer_click(x, y, footer_area);
             }
         }
 
@@ -2288,6 +2292,8 @@ impl App {
             self.input_mode = InputMode::Normal;
             self.sidebar_state.set_focused(false);
         }
+
+        None
     }
 
     /// Check if a point is within a rectangle
@@ -2463,109 +2469,70 @@ impl App {
     }
 
     /// Handle click in footer area
-    fn handle_footer_click(&mut self, x: u16, _y: u16, footer_area: Rect) {
-        // Footer format: "[Key] Action │ [Key] Action │ ..."
-        // Map click position to hint and trigger corresponding action
-        let relative_x = x.saturating_sub(footer_area.x) as usize;
-
-        // Calculate hint positions based on current view mode
+    /// Returns an action to execute if a valid hint was clicked
+    fn handle_footer_click(&mut self, x: u16, _y: u16, footer_area: Rect) -> Option<Action> {
+        // Use the same hints as GlobalFooter to stay in sync
         let hints: Vec<(&str, &str)> = match self.view_mode {
             ViewMode::Chat => vec![
                 ("Tab", "Switch"),
-                ("^N", "+ Project"),
-                ("^W", "Close"),
-                ("^C", "Interrupt"),
-                ("^G", "Debug"),
-                ("^Q", "Quit"),
+                ("C-t", "Sidebar"),
+                ("C-n", "Project"),
+                ("C-S-w", "Close"),
+                ("C-c", "Stop"),
+                ("C-q", "Quit"),
             ],
             ViewMode::RawEvents => vec![
-                ("j/k", "Navigate"),
-                ("l/Enter", "Expand"),
+                ("j/k", "Nav"),
+                ("l/CR", "Expand"),
                 ("h/Esc", "Collapse"),
-                ("^G", "Chat"),
-                ("^Q", "Quit"),
+                ("C-g", "Chat"),
+                ("C-q", "Quit"),
             ],
         };
 
-        let mut current_x: usize = 0;
-        for (key, action) in hints {
-            // Format: "[Key] Action │ " - approximately key.len() + 2 + action.len() + 3
-            let hint_width = key.len() + 2 + 1 + action.len() + 3;
+        // Calculate click position relative to footer
+        let relative_x = x.saturating_sub(footer_area.x) as usize;
+
+        // Match the layout from GlobalFooter::render:
+        // " [key] action   [key] action ..."
+        // Leading space = 1, key has " key " (len+2), action has " action" (len+1), spacing = 3
+        let mut current_x: usize = 1; // Leading space
+
+        for (key, action_name) in hints {
+            // Format: " key " (key.len + 2) + " action" (action_name.len + 1) + spacing (3)
+            let key_width = key.len() + 2;
+            let action_width = action_name.len() + 1;
+            let hint_width = key_width + action_width + 3;
 
             if relative_x >= current_x && relative_x < current_x + hint_width {
-                // Clicked on this hint - trigger the action
-                self.trigger_footer_action(key);
-                return;
+                // Clicked on this hint - look up action from keybinding config
+                return self.lookup_footer_action(key);
             }
             current_x += hint_width;
         }
+        None
     }
 
-    /// Trigger an action from footer hint click
-    fn trigger_footer_action(&mut self, key: &str) {
-        match key {
-            "Tab" => {
-                // Toggle sidebar
-                self.sidebar_state.toggle();
-                if self.sidebar_state.visible {
-                    self.input_mode = InputMode::SidebarNavigation;
-                } else {
-                    self.input_mode = InputMode::Normal;
-                }
-            }
-            "^N" => {
-                // New project - trigger same as Ctrl+N
-                let base_dir = self
-                    .app_state_dao
-                    .as_ref()
-                    .and_then(|dao| dao.get("projects_base_dir").ok().flatten());
+    /// Look up the action for a footer key hint using the keybinding config
+    fn lookup_footer_action(&self, key: &str) -> Option<Action> {
+        // Handle compound keys like "j/k" by taking the first one
+        let primary_key = key.split('/').next().unwrap_or(key);
 
-                if let Some(base_dir_str) = base_dir {
-                    let base_path = if base_dir_str.starts_with('~') {
-                        dirs::home_dir()
-                            .map(|h| h.join(&base_dir_str[1..].trim_start_matches('/')))
-                            .unwrap_or_else(|| PathBuf::from(&base_dir_str))
-                    } else {
-                        PathBuf::from(&base_dir_str)
-                    };
-                    self.project_picker_state.show(base_path);
-                    self.input_mode = InputMode::PickingProject;
-                } else {
-                    self.base_dir_dialog_state.show();
-                    self.input_mode = InputMode::SettingBaseDir;
-                }
-            }
-            "^W" => {
-                // Close tab
-                let active = self.tab_manager.active_index();
-                self.tab_manager.close_tab(active);
-            }
-            "^C" => {
-                // Interrupt
-                if let Some(session) = self.tab_manager.active_session_mut() {
-                    if session.is_processing {
-                        let display = MessageDisplay::System {
-                            content: "Interrupted".to_string(),
-                        };
-                        session.chat_view.push(display.to_chat_message());
-                        session.stop_processing();
-                    }
-                }
-            }
-            "^G" => {
-                // Toggle debug view
-                self.view_mode = match self.view_mode {
-                    ViewMode::Chat => ViewMode::RawEvents,
-                    ViewMode::RawEvents => ViewMode::Chat,
-                };
-            }
-            "^Q" => {
-                // Quit
-                self.save_session_state();
-                self.should_quit = true;
-            }
-            _ => {}
-        }
+        // Special case for "CR" which should be "<CR>"
+        let key_notation = if primary_key == "CR" {
+            "<CR>".to_string()
+        } else {
+            primary_key.to_string()
+        };
+
+        // Parse the key notation
+        let key_combo = parse_key_notation(&key_notation).ok()?;
+
+        // Determine context from current mode
+        let context = KeyContext::from_input_mode(self.input_mode, self.view_mode);
+
+        // Look up action in keybinding config
+        self.config.keybindings.get_action(&key_combo, context).cloned()
     }
 
     async fn handle_app_event(&mut self, event: AppEvent) -> anyhow::Result<()> {
