@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -18,6 +20,24 @@ pub struct StatusBar {
     estimated_cost: f64,
     is_processing: bool,
     spinner: Spinner,
+    /// Whether to show performance metrics
+    show_metrics: bool,
+    /// Time spent in draw()
+    draw_time: Duration,
+    /// Time spent processing events
+    event_time: Duration,
+    /// Calculated FPS
+    fps: f64,
+    /// Scroll input-to-render latency (latest)
+    scroll_latency: Duration,
+    /// Average scroll input-to-render latency
+    scroll_latency_avg: Duration,
+    /// Scroll lines per second (rolling window)
+    scroll_lines_per_sec: f64,
+    /// Scroll events per second (rolling window)
+    scroll_events_per_sec: f64,
+    /// Whether scroll activity happened recently
+    scroll_active: bool,
 }
 
 impl StatusBar {
@@ -30,6 +50,15 @@ impl StatusBar {
             estimated_cost: 0.0,
             is_processing: false,
             spinner: Spinner::dots(),
+            show_metrics: false,
+            draw_time: Duration::ZERO,
+            event_time: Duration::ZERO,
+            fps: 0.0,
+            scroll_latency: Duration::ZERO,
+            scroll_latency_avg: Duration::ZERO,
+            scroll_lines_per_sec: 0.0,
+            scroll_events_per_sec: 0.0,
+            scroll_active: false,
         }
     }
 
@@ -59,6 +88,30 @@ impl StatusBar {
 
     pub fn set_processing(&mut self, processing: bool) {
         self.is_processing = processing;
+    }
+
+    /// Set performance metrics for display
+    pub fn set_metrics(
+        &mut self,
+        show: bool,
+        draw_time: Duration,
+        event_time: Duration,
+        fps: f64,
+        scroll_latency: Duration,
+        scroll_latency_avg: Duration,
+        scroll_lines_per_sec: f64,
+        scroll_events_per_sec: f64,
+        scroll_active: bool,
+    ) {
+        self.show_metrics = show;
+        self.draw_time = draw_time;
+        self.event_time = event_time;
+        self.fps = fps;
+        self.scroll_latency = scroll_latency;
+        self.scroll_latency_avg = scroll_latency_avg;
+        self.scroll_lines_per_sec = scroll_lines_per_sec;
+        self.scroll_events_per_sec = scroll_events_per_sec;
+        self.scroll_active = scroll_active;
     }
 
     fn update_cost(&mut self) {
@@ -168,6 +221,73 @@ impl StatusBar {
                 Color::Green
             }),
         ));
+
+        // Performance metrics (when enabled)
+        if self.show_metrics {
+            spans.push(Span::raw(" │ "));
+
+            // FPS indicator
+            let fps_color = if self.fps >= 55.0 {
+                Color::Green
+            } else if self.fps >= 30.0 {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
+            spans.push(Span::styled(
+                format!("FPS:{:.0} ", self.fps),
+                Style::default().fg(fps_color),
+            ));
+
+            // Work time = draw + event (actual CPU work, excluding sleep)
+            let work_ms = self.draw_time.as_millis() + self.event_time.as_millis();
+            let work_color = if work_ms <= 8 {
+                Color::Green
+            } else if work_ms <= 14 {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
+            spans.push(Span::styled(
+                format!("work:{}ms ", work_ms),
+                Style::default().fg(work_color),
+            ));
+
+            // Breakdown: draw/event
+            spans.push(Span::styled(
+                format!("(draw:{} evt:{})",
+                    self.draw_time.as_millis(),
+                    self.event_time.as_millis()),
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            // Scroll responsiveness (only highlight if active)
+            let latency_ms = self.scroll_latency.as_secs_f64() * 1000.0;
+            let latency_avg_ms = self.scroll_latency_avg.as_secs_f64() * 1000.0;
+            let scroll_color = if self.scroll_active {
+                if latency_ms <= 16.0 {
+                    Color::Green
+                } else if latency_ms <= 33.0 {
+                    Color::Yellow
+                } else {
+                    Color::Red
+                }
+            } else {
+                Color::DarkGray
+            };
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("lag:{:.1}ms(avg:{:.1}) ", latency_ms, latency_avg_ms),
+                Style::default().fg(scroll_color),
+            ));
+            spans.push(Span::styled(
+                format!(
+                    "scroll:{:.0}l/s ev:{:.0}/s",
+                    self.scroll_lines_per_sec, self.scroll_events_per_sec
+                ),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
 
         let line = Line::from(spans);
         let paragraph = Paragraph::new(line)
