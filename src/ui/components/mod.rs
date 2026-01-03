@@ -6,6 +6,7 @@ mod confirmation_dialog;
 mod dialog;
 mod error_dialog;
 mod global_footer;
+mod help_dialog;
 mod input_box;
 mod markdown;
 mod model_selector;
@@ -29,6 +30,7 @@ pub use confirmation_dialog::{
 };
 pub use dialog::{DialogFrame, InstructionBar, StatusLine};
 pub use error_dialog::{ErrorDialog, ErrorDialogState};
+pub use help_dialog::{HelpCategory, HelpDialog, HelpDialogState, KeybindingEntry};
 pub use project_picker::{ProjectEntry, ProjectPicker, ProjectPickerState};
 pub use text_input::TextInputState;
 pub use chat_view::{ChatMessage, ChatView, MessageRole};

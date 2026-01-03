@@ -92,6 +92,10 @@ pub enum InputMode {
     RemovingProject,
     /// Showing an error dialog
     ShowingError,
+    /// Command mode (typing :command)
+    Command,
+    /// Showing help dialog
+    ShowingHelp,
 }
 
 /// View mode for the main content area

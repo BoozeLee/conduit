@@ -34,8 +34,8 @@ use crate::ui::components::{
     AddRepoDialog, AddRepoDialogState, AgentSelector, AgentSelectorState, BaseDirDialog,
     BaseDirDialogState, ChatMessage, ConfirmationContext, ConfirmationDialog,
     ConfirmationDialogState, ConfirmationType, ErrorDialog, ErrorDialogState, EventDirection,
-    GlobalFooter, ModelSelector, ModelSelectorState, ProcessingState, ProjectPicker,
-    ProjectPickerState, Sidebar, SidebarData, SidebarState, SplashScreen, TabBar,
+    GlobalFooter, HelpDialog, HelpDialogState, ModelSelector, ModelSelectorState, ProcessingState,
+    ProjectPicker, ProjectPickerState, Sidebar, SidebarData, SidebarState, SplashScreen, TabBar,
 };
 use crate::ui::events::{AppEvent, InputMode, ViewMode};
 use crate::ui::session::AgentSession;
@@ -230,6 +230,10 @@ pub struct App {
     confirmation_dialog_state: ConfirmationDialogState,
     /// Error dialog state
     error_dialog_state: ErrorDialogState,
+    /// Help dialog state
+    help_dialog_state: HelpDialogState,
+    /// Command mode buffer
+    command_buffer: String,
     // Layout areas for mouse hit-testing
     /// Sidebar area (if visible)
     sidebar_area: Option<Rect>,
@@ -308,6 +312,8 @@ impl App {
             project_picker_state: ProjectPickerState::new(),
             confirmation_dialog_state: ConfirmationDialogState::new(),
             error_dialog_state: ErrorDialogState::new(),
+            help_dialog_state: HelpDialogState::new(),
+            command_buffer: String::new(),
             // Layout areas initialized to None, will be set during draw()
             sidebar_area: None,
             tab_bar_area: None,
@@ -857,28 +863,44 @@ impl App {
 
             // ========== Chat Scrolling ==========
             Action::ScrollUp(n) => {
-                if let Some(session) = self.tab_manager.active_session_mut() {
-                    session.chat_view.scroll_up(n as usize);
+                if self.input_mode == InputMode::ShowingHelp {
+                    self.help_dialog_state.scroll_up(n as usize);
+                } else {
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_up(n as usize);
+                    }
+                    self.record_chat_scroll(n as usize);
                 }
-                self.record_chat_scroll(n as usize);
             }
             Action::ScrollDown(n) => {
-                if let Some(session) = self.tab_manager.active_session_mut() {
-                    session.chat_view.scroll_down(n as usize);
+                if self.input_mode == InputMode::ShowingHelp {
+                    self.help_dialog_state.scroll_down(n as usize);
+                } else {
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_down(n as usize);
+                    }
+                    self.record_chat_scroll(n as usize);
                 }
-                self.record_chat_scroll(n as usize);
             }
             Action::ScrollPageUp => {
-                if let Some(session) = self.tab_manager.active_session_mut() {
-                    session.chat_view.scroll_up(10);
+                if self.input_mode == InputMode::ShowingHelp {
+                    self.help_dialog_state.page_up();
+                } else {
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_up(10);
+                    }
+                    self.record_chat_scroll(10);
                 }
-                self.record_chat_scroll(10);
             }
             Action::ScrollPageDown => {
-                if let Some(session) = self.tab_manager.active_session_mut() {
-                    session.chat_view.scroll_down(10);
+                if self.input_mode == InputMode::ShowingHelp {
+                    self.help_dialog_state.page_down();
+                } else {
+                    if let Some(session) = self.tab_manager.active_session_mut() {
+                        session.chat_view.scroll_down(10);
+                    }
+                    self.record_chat_scroll(10);
                 }
-                self.record_chat_scroll(10);
             }
             Action::ScrollToTop => {
                 if let Some(session) = self.tab_manager.active_session_mut() {
@@ -898,8 +920,23 @@ impl App {
                 }
             }
             Action::Backspace => {
-                if let Some(session) = self.tab_manager.active_session_mut() {
-                    session.input_box.backspace();
+                match self.input_mode {
+                    InputMode::Command => {
+                        if self.command_buffer.is_empty() {
+                            // Exit command mode if buffer is empty
+                            self.input_mode = InputMode::Normal;
+                        } else {
+                            self.command_buffer.pop();
+                        }
+                    }
+                    InputMode::ShowingHelp => {
+                        self.help_dialog_state.delete_char();
+                    }
+                    _ => {
+                        if let Some(session) = self.tab_manager.active_session_mut() {
+                            session.input_box.backspace();
+                        }
+                    }
                 }
             }
             Action::Delete => {
@@ -1222,6 +1259,14 @@ impl App {
                     InputMode::Scrolling => {
                         self.input_mode = InputMode::Normal;
                     }
+                    InputMode::Command => {
+                        self.command_buffer.clear();
+                        self.input_mode = InputMode::Normal;
+                    }
+                    InputMode::ShowingHelp => {
+                        self.help_dialog_state.hide();
+                        self.input_mode = InputMode::Normal;
+                    }
                     _ => {}
                 }
             }
@@ -1387,6 +1432,17 @@ impl App {
                     self.create_tab_with_agent(agent_type);
                 }
             }
+
+            // ========== Command Mode ==========
+            Action::ShowHelp => {
+                self.help_dialog_state.show(&self.config.keybindings);
+                self.input_mode = InputMode::ShowingHelp;
+            }
+            Action::ExecuteCommand => {
+                if self.input_mode == InputMode::Command {
+                    self.execute_command();
+                }
+            }
         }
 
         Ok(())
@@ -1429,9 +1485,35 @@ impl App {
 
         match self.input_mode {
             InputMode::Normal => {
+                // Check for command mode trigger (: on empty input)
+                if c == ':' {
+                    if let Some(session) = self.tab_manager.active_session() {
+                        if session.input_box.input().is_empty() {
+                            self.command_buffer.clear();
+                            self.input_mode = InputMode::Command;
+                            return;
+                        }
+                    }
+                }
+                // Check for help trigger (? on empty input)
+                if c == '?' {
+                    if let Some(session) = self.tab_manager.active_session() {
+                        if session.input_box.input().is_empty() {
+                            self.help_dialog_state.show(&self.config.keybindings);
+                            self.input_mode = InputMode::ShowingHelp;
+                            return;
+                        }
+                    }
+                }
                 if let Some(session) = self.tab_manager.active_session_mut() {
                     session.input_box.insert_char(c);
                 }
+            }
+            InputMode::Command => {
+                self.command_buffer.push(c);
+            }
+            InputMode::ShowingHelp => {
+                self.help_dialog_state.insert_char(c);
             }
             InputMode::AddingRepository => {
                 self.add_repo_dialog_state.insert_char(c);
@@ -1442,6 +1524,26 @@ impl App {
             InputMode::PickingProject => {
                 self.project_picker_state.insert_char(c);
             }
+            _ => {}
+        }
+    }
+
+    /// Execute a command from command mode
+    fn execute_command(&mut self) {
+        let command = self.command_buffer.trim().to_lowercase();
+        self.command_buffer.clear();
+        self.input_mode = InputMode::Normal;
+
+        match command.as_str() {
+            "help" | "h" => {
+                self.help_dialog_state.show(&self.config.keybindings);
+                self.input_mode = InputMode::ShowingHelp;
+            }
+            "q" | "quit" => {
+                self.save_session_state();
+                self.should_quit = true;
+            }
+            // Unknown commands silently exit command mode
             _ => {}
         }
     }
@@ -2171,7 +2273,8 @@ impl App {
     }
 
     fn should_route_scroll_to_chat(&self) -> bool {
-        !(self.input_mode == InputMode::PickingProject && self.project_picker_state.is_visible())
+        self.input_mode != InputMode::ShowingHelp
+            && !(self.input_mode == InputMode::PickingProject && self.project_picker_state.is_visible())
     }
 
     fn flush_scroll_deltas(&mut self, pending_up: &mut usize, pending_down: &mut usize) {
@@ -2179,7 +2282,15 @@ impl App {
             return;
         }
 
-        if self.input_mode == InputMode::PickingProject && self.project_picker_state.is_visible() {
+        if self.input_mode == InputMode::ShowingHelp {
+            // Route scroll to help dialog
+            if *pending_up > 0 {
+                self.help_dialog_state.scroll_up(*pending_up);
+            }
+            if *pending_down > 0 {
+                self.help_dialog_state.scroll_down(*pending_down);
+            }
+        } else if self.input_mode == InputMode::PickingProject && self.project_picker_state.is_visible() {
             for _ in 0..*pending_up {
                 self.project_picker_state.select_prev();
             }
@@ -2205,8 +2316,10 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                // Route scroll to project picker if it's visible
-                if self.input_mode == InputMode::PickingProject
+                // Route scroll to appropriate component based on mode
+                if self.input_mode == InputMode::ShowingHelp {
+                    self.help_dialog_state.scroll_up(3);
+                } else if self.input_mode == InputMode::PickingProject
                     && self.project_picker_state.is_visible()
                 {
                     self.project_picker_state.select_prev();
@@ -2217,8 +2330,10 @@ impl App {
                 None
             }
             MouseEventKind::ScrollDown => {
-                // Route scroll to project picker if it's visible
-                if self.input_mode == InputMode::PickingProject
+                // Route scroll to appropriate component based on mode
+                if self.input_mode == InputMode::ShowingHelp {
+                    self.help_dialog_state.scroll_down(3);
+                } else if self.input_mode == InputMode::PickingProject
                     && self.project_picker_state.is_visible()
                 {
                     self.project_picker_state.select_next();
@@ -3065,6 +3180,7 @@ impl App {
                 tab_bar.render(chunks[0], f.buffer_mut());
 
                 // Draw active session components
+                let is_command_mode = self.input_mode == InputMode::Command;
                 if let Some(session) = self.tab_manager.active_session_mut() {
                     // Render chat with thinking indicator if processing
                     let thinking_line = if session.is_processing {
@@ -3076,7 +3192,10 @@ impl App {
                         .chat_view
                         .render_with_indicator(chunks[1], f.buffer_mut(), thinking_line);
 
-                    session.input_box.render(chunks[2], f.buffer_mut());
+                    // Render input box (not in command mode)
+                    if !is_command_mode {
+                        session.input_box.render(chunks[2], f.buffer_mut());
+                    }
                     // Update status bar with performance metrics
                     session.status_bar.set_metrics(
                         self.show_metrics,
@@ -3097,6 +3216,15 @@ impl App {
                         let (cx, cy) = session.input_box.cursor_position(chunks[2], scroll_offset);
                         f.set_cursor_position((cx, cy));
                     }
+                }
+
+                // Render command prompt if in command mode (outside session borrow)
+                if is_command_mode {
+                    self.render_command_prompt(chunks[2], f.buffer_mut());
+                    // Cursor at end of command buffer (after ":")
+                    let cx = chunks[2].x + 1 + self.command_buffer.len() as u16;
+                    let cy = chunks[2].y;
+                    f.set_cursor_position((cx, cy));
                 }
 
                 // Draw footer
@@ -3207,6 +3335,11 @@ impl App {
             dialog.render(size, f.buffer_mut());
         }
 
+        // Draw help dialog (on top of everything)
+        if self.help_dialog_state.is_visible() {
+            HelpDialog::new().render(size, f.buffer_mut(), &mut self.help_dialog_state);
+        }
+
         // Draw removing project spinner overlay
         if self.input_mode == InputMode::RemovingProject {
             use crate::ui::components::Spinner;
@@ -3245,6 +3378,24 @@ impl App {
             let para = Paragraph::new(line).alignment(Alignment::Center);
             para.render(inner, f.buffer_mut());
         }
+    }
+
+    /// Render command mode prompt
+    fn render_command_prompt(&self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+        use ratatui::style::{Color, Style};
+        use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Command ");
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let prompt = format!(":{}", self.command_buffer);
+        let para = Paragraph::new(prompt).style(Style::default().fg(Color::White));
+        para.render(inner, buf);
     }
 
     /// Extract a filename from tool result text

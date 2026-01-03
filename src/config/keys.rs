@@ -112,6 +112,10 @@ pub enum KeyContext {
     BaseDir,
     /// Raw events debug view
     RawEvents,
+    /// Command mode (typing :command)
+    Command,
+    /// Help dialog
+    HelpDialog,
 }
 
 impl KeyContext {
@@ -127,6 +131,8 @@ impl KeyContext {
             KeyContext::AddRepository,
             KeyContext::BaseDir,
             KeyContext::RawEvents,
+            KeyContext::Command,
+            KeyContext::HelpDialog,
         ]
     }
 
@@ -151,6 +157,8 @@ impl KeyContext {
             InputMode::Confirming => KeyContext::Dialog,
             InputMode::RemovingProject => KeyContext::Dialog,
             InputMode::ShowingError => KeyContext::Dialog,
+            InputMode::Command => KeyContext::Command,
+            InputMode::ShowingHelp => KeyContext::HelpDialog,
         }
     }
 }
