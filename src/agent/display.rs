@@ -58,7 +58,12 @@ impl MessageDisplay {
     /// Map raw tool names to display names
     pub fn tool_display_name(raw_name: &str) -> &'static str {
         match raw_name {
-            "exec_command" | "shell" | "local_shell_call" | "command_execution" | "Bash" => "Bash",
+            "exec_command"
+            | "shell"
+            | "shell_command"
+            | "local_shell_call"
+            | "command_execution"
+            | "Bash" => "Bash",
             "read_file" | "Read" => "Read",
             "write_file" | "Write" => "Write",
             "list_directory" | "LS" => "LS",
@@ -74,9 +79,12 @@ impl MessageDisplay {
     /// Map raw tool names to display names, returning owned String for unknown names
     pub fn tool_display_name_owned(raw_name: &str) -> String {
         match raw_name {
-            "exec_command" | "shell" | "local_shell_call" | "command_execution" | "Bash" => {
-                "Bash".to_string()
-            }
+            "exec_command"
+            | "shell"
+            | "shell_command"
+            | "local_shell_call"
+            | "command_execution"
+            | "Bash" => "Bash".to_string(),
             "read_file" | "Read" => "Read".to_string(),
             "write_file" | "Write" => "Write".to_string(),
             "list_directory" | "LS" => "LS".to_string(),
@@ -106,6 +114,13 @@ impl MessageDisplay {
         // Find exit code
         if let Some(pos) = raw_output.find("Process exited with code ") {
             let after = &raw_output[pos + 25..];
+            if let Some(end) = after.find('\n') {
+                if let Ok(code) = after[..end].trim().parse::<i32>() {
+                    exit_code = Some(code);
+                }
+            }
+        } else if let Some(pos) = raw_output.find("Exit code:") {
+            let after = &raw_output[pos + 10..];
             if let Some(end) = after.find('\n') {
                 if let Ok(code) = after[..end].trim().parse::<i32>() {
                     exit_code = Some(code);

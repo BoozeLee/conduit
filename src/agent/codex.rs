@@ -1,21 +1,31 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 
 use async_trait::async_trait;
+use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+use crate::agent::display::MessageDisplay;
 use crate::agent::error::AgentError;
 use crate::agent::events::{
     AgentEvent, AssistantMessageEvent, CommandOutputEvent, ErrorEvent, SessionInitEvent,
-    TokenUsage, TurnCompletedEvent, TurnFailedEvent,
+    ReasoningEvent, TokenUsage, TokenUsageEvent, ToolCompletedEvent, ToolStartedEvent,
+    TurnCompletedEvent, TurnFailedEvent,
 };
 use crate::agent::runner::{AgentHandle, AgentRunner, AgentStartConfig, AgentType};
 use crate::agent::session::SessionId;
-use crate::agent::stream::{CodexRawEvent, JsonlStreamParser};
+use crate::agent::stream::{CodexErrorInfo, CodexThreadItem, CodexUsage, JsonlStreamParser};
 
 pub struct CodexCliRunner {
     binary_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct FunctionCallInfo {
+    name: String,
+    command: String,
 }
 
 impl CodexCliRunner {
@@ -72,17 +82,202 @@ impl CodexCliRunner {
         cmd
     }
 
-    /// Convert Codex-specific event to unified AgentEvent
-    fn convert_event(raw: CodexRawEvent) -> Option<AgentEvent> {
-        match raw {
-            CodexRawEvent::ThreadStarted { thread_id } => {
-                Some(AgentEvent::SessionInit(SessionInitEvent {
-                    session_id: SessionId::from_string(thread_id),
-                    model: None,
+    fn extract_text_content(payload: &Value) -> String {
+        if let Some(blocks) = payload.get("content").and_then(|c| c.as_array()) {
+            return blocks
+                .iter()
+                .filter_map(|block| {
+                    let block_type = block.get("type")?.as_str()?;
+                    match block_type {
+                        "input_text" | "output_text" | "text" => {
+                            block.get("text")?.as_str().map(|s| s.to_string())
+                        }
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+
+        payload
+            .get("text")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    fn extract_summary_text(payload: &Value) -> Option<String> {
+        let summary = payload.get("summary")?.as_array()?;
+        let text = summary
+            .iter()
+            .filter_map(|entry| entry.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
+    fn parse_args(payload: &Value) -> Option<Value> {
+        if let Some(args_str) = payload.get("arguments").and_then(|a| a.as_str()) {
+            serde_json::from_str::<Value>(args_str).ok()
+        } else if let Some(args_obj) = payload.get("arguments").and_then(|a| a.as_object()) {
+            Some(Value::Object(args_obj.clone()))
+        } else {
+            None
+        }
+    }
+
+    fn extract_command_from_args(args: &Value) -> Option<String> {
+        args.get("command")
+            .or_else(|| args.get("cmd"))
+            .or_else(|| args.get("file_path"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    fn extract_function_call_info(raw: &Value) -> Option<(String, FunctionCallInfo)> {
+        let entry_type = raw.get("type")?.as_str()?;
+        if entry_type != "response_item" {
+            return None;
+        }
+        let payload = raw.get("payload")?;
+        let payload_type = payload.get("type")?.as_str()?;
+        if payload_type != "function_call" {
+            return None;
+        }
+
+        let call_id = payload.get("call_id")?.as_str()?.to_string();
+        let name = payload.get("name")?.as_str()?.to_string();
+        let args = Self::parse_args(payload).unwrap_or(Value::Null);
+        let command = Self::extract_command_from_args(&args).unwrap_or_default();
+
+        Some((call_id, FunctionCallInfo { name, command }))
+    }
+
+    fn convert_message(payload: &Value) -> Option<AgentEvent> {
+        let role = payload.get("role").and_then(|r| r.as_str())?;
+        let text = Self::extract_text_content(payload);
+        if text.is_empty() {
+            return None;
+        }
+
+        match role {
+            "assistant" => Some(AgentEvent::AssistantMessage(AssistantMessageEvent {
+                text,
+                is_final: true,
+            })),
+            "user" => None,
+            _ => None,
+        }
+    }
+
+    fn convert_response_item(
+        payload: &Value,
+        function_calls: &HashMap<String, FunctionCallInfo>,
+    ) -> Option<AgentEvent> {
+        let payload_type = payload.get("type").and_then(|t| t.as_str())?;
+        match payload_type {
+            "message" => Self::convert_message(payload),
+            "function_call" => {
+                let name = payload.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                let args = Self::parse_args(payload).unwrap_or(Value::Null);
+                Some(AgentEvent::ToolStarted(ToolStartedEvent {
+                    tool_name: name.to_string(),
+                    tool_id: name.to_string(),
+                    arguments: args,
                 }))
             }
-            CodexRawEvent::TurnStarted => Some(AgentEvent::TurnStarted),
-            CodexRawEvent::TurnCompleted { usage } => {
+            "function_call_output" => {
+                let call_id = payload.get("call_id").and_then(|c| c.as_str()).unwrap_or("");
+                let raw_output = payload.get("output").and_then(|o| o.as_str()).unwrap_or("");
+                let (output, exit_code) = MessageDisplay::parse_codex_tool_output(raw_output);
+                let info = function_calls.get(call_id);
+                let tool_name = info.map(|i| i.name.as_str()).unwrap_or("tool");
+                let command = info.map(|i| i.command.as_str()).unwrap_or(call_id);
+
+                if Self::is_shell_tool(tool_name) {
+                    Some(AgentEvent::CommandOutput(CommandOutputEvent {
+                        command: command.to_string(),
+                        output,
+                        exit_code,
+                        is_streaming: false,
+                    }))
+                } else {
+                    Some(AgentEvent::ToolCompleted(ToolCompletedEvent {
+                        tool_id: tool_name.to_string(),
+                        success: true,
+                        result: Some(output),
+                        error: None,
+                    }))
+                }
+            }
+            "reasoning" => Self::extract_summary_text(payload)
+                .map(|text| AgentEvent::AssistantReasoning(ReasoningEvent { text })),
+            _ => Some(AgentEvent::Raw {
+                data: payload.clone(),
+            }),
+        }
+    }
+
+    fn convert_event_msg(payload: &Value) -> Option<AgentEvent> {
+        let payload_type = payload.get("type").and_then(|t| t.as_str())?;
+        match payload_type {
+            "agent_reasoning" => payload.get("text").and_then(|t| t.as_str()).map(|text| {
+                AgentEvent::AssistantReasoning(ReasoningEvent {
+                    text: text.to_string(),
+                })
+            }),
+            "token_count" => {
+                let info = payload.get("info")?;
+                let total = info
+                    .get("total_token_usage")
+                    .or_else(|| info.get("last_token_usage"))?;
+                let input_tokens = total.get("input_tokens")?.as_i64()?;
+                let output_tokens = total.get("output_tokens")?.as_i64()?;
+                let cached_tokens = total
+                    .get("cached_input_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let total_tokens = total
+                    .get("total_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(input_tokens + output_tokens);
+                let context_window = info
+                    .get("model_context_window")
+                    .and_then(|v| v.as_i64());
+
+                Some(AgentEvent::TokenUsage(TokenUsageEvent {
+                    usage: TokenUsage {
+                        input_tokens,
+                        output_tokens,
+                        cached_tokens,
+                        total_tokens,
+                    },
+                    context_window,
+                    usage_percent: None,
+                }))
+            }
+            _ => Some(AgentEvent::Raw {
+                data: payload.clone(),
+            }),
+        }
+    }
+
+    fn convert_thread_event(raw: &Value) -> Option<AgentEvent> {
+        let event_type = raw.get("type").and_then(|t| t.as_str())?;
+        match event_type {
+            "thread.started" => raw.get("thread_id").and_then(|v| v.as_str()).map(|id| {
+                AgentEvent::SessionInit(SessionInitEvent {
+                    session_id: SessionId::from_string(id.to_string()),
+                    model: None,
+                })
+            }),
+            "turn.started" => Some(AgentEvent::TurnStarted),
+            "turn.completed" => {
+                let usage: CodexUsage = serde_json::from_value(raw.get("usage")?.clone()).ok()?;
                 Some(AgentEvent::TurnCompleted(TurnCompletedEvent {
                     usage: TokenUsage {
                         input_tokens: usage.input_tokens,
@@ -92,25 +287,57 @@ impl CodexCliRunner {
                     },
                 }))
             }
-            CodexRawEvent::TurnFailed { error } => {
+            "turn.failed" => {
+                let error: CodexErrorInfo =
+                    serde_json::from_value(raw.get("error")?.clone()).ok()?;
                 Some(AgentEvent::TurnFailed(TurnFailedEvent {
                     error: error.message,
                 }))
             }
-            CodexRawEvent::ItemCompleted { item } => Self::convert_item_event(&item),
-            CodexRawEvent::ItemUpdated { item } => {
-                // For streaming updates, check if it's a message
+            "item.completed" | "item.updated" => {
+                let item: CodexThreadItem =
+                    serde_json::from_value(raw.get("item")?.clone()).ok()?;
                 Self::convert_item_event(&item)
             }
-            CodexRawEvent::Error { message } => Some(AgentEvent::Error(ErrorEvent {
-                message,
-                is_fatal: true,
-            })),
-            CodexRawEvent::ItemStarted { .. } | CodexRawEvent::Unknown => None,
+            "error" => raw.get("message").and_then(|m| m.as_str()).map(|message| {
+                AgentEvent::Error(ErrorEvent {
+                    message: message.to_string(),
+                    is_fatal: true,
+                })
+            }),
+            _ => None,
         }
     }
 
-    fn convert_item_event(item: &crate::agent::stream::CodexThreadItem) -> Option<AgentEvent> {
+    /// Convert Codex-specific event to unified AgentEvent
+    fn convert_event(
+        raw: &Value,
+        function_calls: &HashMap<String, FunctionCallInfo>,
+    ) -> Option<AgentEvent> {
+        let event_type = raw.get("type").and_then(|t| t.as_str())?;
+        match event_type {
+            "session_meta" => raw.get("payload").and_then(|p| {
+                p.get("id").and_then(|id| id.as_str()).map(|id| {
+                    AgentEvent::SessionInit(SessionInitEvent {
+                        session_id: SessionId::from_string(id.to_string()),
+                        model: None,
+                    })
+                })
+            }),
+            "response_item" => raw
+                .get("payload")
+                .and_then(|payload| Self::convert_response_item(payload, function_calls)),
+            "event_msg" => raw
+                .get("payload")
+                .and_then(|payload| Self::convert_event_msg(payload)),
+            "message" => Self::convert_message(raw),
+            "thread.started" | "turn.started" | "turn.completed" | "turn.failed" | "item.updated"
+            | "item.completed" | "error" => Self::convert_thread_event(raw),
+            _ => Some(AgentEvent::Raw { data: raw.clone() }),
+        }
+    }
+
+    fn convert_item_event(item: &CodexThreadItem) -> Option<AgentEvent> {
         let item_type = item.item_type.as_deref()?;
 
         match item_type {
@@ -152,6 +379,18 @@ impl CodexCliRunner {
             _ => None,
         }
     }
+
+    fn is_shell_tool(name: &str) -> bool {
+        matches!(
+            name,
+            "shell_command"
+                | "exec_command"
+                | "command_execution"
+                | "local_shell_call"
+                | "shell"
+                | "Bash"
+        )
+    }
 }
 
 impl Default for CodexCliRunner {
@@ -177,14 +416,19 @@ impl AgentRunner for CodexCliRunner {
 
         // Spawn JSONL parser task
         tokio::spawn(async move {
-            let (raw_tx, mut raw_rx) = mpsc::channel::<CodexRawEvent>(256);
+            let (raw_tx, mut raw_rx) = mpsc::channel::<Value>(256);
 
             let parse_handle = tokio::spawn(async move {
                 let _ = JsonlStreamParser::parse_stream(stdout, raw_tx).await;
             });
 
+            let mut function_calls: HashMap<String, FunctionCallInfo> = HashMap::new();
+
             while let Some(raw_event) = raw_rx.recv().await {
-                if let Some(event) = Self::convert_event(raw_event) {
+                if let Some((call_id, info)) = Self::extract_function_call_info(&raw_event) {
+                    function_calls.insert(call_id, info);
+                }
+                if let Some(event) = Self::convert_event(&raw_event, &function_calls) {
                     if tx.send(event).await.is_err() {
                         break;
                     }

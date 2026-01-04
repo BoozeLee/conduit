@@ -701,7 +701,12 @@ fn extract_function_call_info(entry: &Value) -> Option<(String, FunctionCallInfo
     // Parse arguments JSON to get command
     let args_str = payload.get("arguments")?.as_str()?;
     let args: Value = serde_json::from_str(args_str).ok()?;
-    let command = args.get("cmd")?.as_str()?.to_string();
+    let command = args
+        .get("command")
+        .or_else(|| args.get("cmd"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
 
     Some((call_id, FunctionCallInfo { name, command }))
 }
