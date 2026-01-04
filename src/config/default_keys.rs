@@ -100,6 +100,8 @@ pub fn default_keybindings() -> KeybindingConfig {
 
     // Tab cycling
     chat.insert(KeyCombo::new(KeyCode::Tab, KeyModifiers::NONE), Action::NextTab);
+    // BackTab (Shift+Tab) - some terminals send SHIFT modifier, some don't
+    chat.insert(KeyCombo::new(KeyCode::BackTab, KeyModifiers::NONE), Action::PrevTab);
     chat.insert(KeyCombo::new(KeyCode::BackTab, KeyModifiers::SHIFT), Action::PrevTab);
 
     // ========== Scrolling Mode ==========
@@ -133,6 +135,8 @@ pub fn default_keybindings() -> KeybindingConfig {
     bind(sidebar, "h", Action::Collapse);
     sidebar.insert(KeyCombo::new(KeyCode::Esc, KeyModifiers::NONE), Action::ExitSidebarMode);
     sidebar.insert(KeyCombo::new(KeyCode::Tab, KeyModifiers::NONE), Action::NextTab);
+    // BackTab (Shift+Tab) - some terminals send SHIFT modifier, some don't
+    sidebar.insert(KeyCombo::new(KeyCode::BackTab, KeyModifiers::NONE), Action::PrevTab);
     sidebar.insert(KeyCombo::new(KeyCode::BackTab, KeyModifiers::SHIFT), Action::PrevTab);
     bind(sidebar, "r", Action::AddRepository);
     bind(sidebar, "s", Action::OpenSettings);

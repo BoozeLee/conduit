@@ -912,6 +912,9 @@ impl App {
                     InputMode::ShowingHelp => {
                         self.state.help_dialog_state.delete_char();
                     }
+                    InputMode::ImportingSession => {
+                        self.state.session_import_state.delete_char();
+                    }
                     _ => {
                         if let Some(session) = self.state.tab_manager.active_session_mut() {
                             session.input_box.backspace();
