@@ -12,6 +12,7 @@ use ratatui::{
         StatefulWidget, Widget, Wrap,
     },
 };
+use unicode_width::UnicodeWidthStr;
 
 use super::{MarkdownRenderer, TurnSummary};
 
@@ -952,6 +953,23 @@ impl ChatView {
         }
     }
 
+    /// Calculate the wrapped height of a line (how many physical rows it takes)
+    fn wrapped_line_height(line: &Line, width: usize) -> usize {
+        if width == 0 {
+            return 1;
+        }
+        let line_width: usize = line.spans.iter().map(|s| s.content.width()).sum();
+        if line_width == 0 {
+            return 1; // Empty line still takes one row
+        }
+        (line_width + width - 1) / width // Ceiling division
+    }
+
+    /// Calculate total wrapped height for all lines
+    fn total_wrapped_height(lines: &[Line], width: usize) -> usize {
+        lines.iter().map(|l| Self::wrapped_line_height(l, width)).sum()
+    }
+
     /// Render the chat view
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.render_with_indicator(area, buf, None);
@@ -1000,31 +1018,35 @@ impl ChatView {
         if let Some(indicator) = thinking_line {
             lines.push(indicator);
         }
-        let total_lines = lines.len();
-        let visible_height = inner.height as usize;
 
-        // Clamp scroll offset
-        let max_scroll = total_lines.saturating_sub(visible_height);
+        let visible_height = inner.height as usize;
+        let content_width = inner.width as usize;
+
+        // Calculate total wrapped height (physical rows after wrapping)
+        let total_wrapped = Self::total_wrapped_height(&lines, content_width);
+
+        // Clamp scroll offset based on wrapped height
+        let max_scroll = total_wrapped.saturating_sub(visible_height);
         self.scroll_offset = self.scroll_offset.min(max_scroll);
 
-        // Calculate which lines to show (from bottom)
-        let start_line = total_lines.saturating_sub(visible_height + self.scroll_offset);
-        let end_line = total_lines.saturating_sub(self.scroll_offset);
+        // Convert scroll_offset (from bottom) to scroll position (from top)
+        // scroll_offset=0 means show bottom, so we want to scroll to max position
+        let scroll_from_top = max_scroll.saturating_sub(self.scroll_offset);
 
-        let visible_lines: Vec<Line<'static>> = lines[start_line..end_line].to_vec();
-
-        let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
+        let paragraph = Paragraph::new(lines.clone())
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_from_top as u16, 0));
 
         paragraph.render(inner, buf);
 
         // Render scrollbar if needed
-        if total_lines > visible_height {
+        if total_wrapped > visible_height {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("↑"))
                 .end_symbol(Some("↓"));
 
             let mut scrollbar_state = ScrollbarState::new(max_scroll)
-                .position(max_scroll.saturating_sub(self.scroll_offset));
+                .position(scroll_from_top);
 
             scrollbar.render(
                 Rect {
