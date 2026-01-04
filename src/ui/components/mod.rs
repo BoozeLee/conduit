@@ -37,7 +37,7 @@ pub use chat_view::{ChatMessage, ChatView, MessageRole};
 pub use global_footer::GlobalFooter;
 pub use input_box::InputBox;
 pub use markdown::MarkdownRenderer;
-pub use model_selector::{ModelSelector, ModelSelectorState};
+pub use model_selector::{ModelSelector, ModelSelectorItem, ModelSelectorState};
 pub use raw_events_view::{EventDirection, RawEventEntry, RawEventsView};
 pub use sidebar::{Sidebar, SidebarState};
 pub use spinner::Spinner;

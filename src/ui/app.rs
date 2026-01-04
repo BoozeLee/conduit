@@ -2382,6 +2382,16 @@ impl App {
     async fn handle_mouse_click(&mut self, x: u16, y: u16) -> anyhow::Result<Vec<Effect>> {
         let mut effects = Vec::new();
 
+        // Handle model selector clicks first (it's a modal dialog)
+        if self.state.input_mode == InputMode::SelectingModel
+            && self.state.model_selector_state.is_visible()
+        {
+            if let Some(effect) = self.handle_model_selector_click(x, y) {
+                effects.push(effect);
+            }
+            return Ok(effects);
+        }
+
         // Handle project picker clicks first (it's a modal dialog)
         if self.state.input_mode == InputMode::PickingProject
             && self.state.project_picker_state.is_visible()
@@ -2571,6 +2581,129 @@ impl App {
                 self.state.input_mode = InputMode::SelectingModel;
             }
         }
+    }
+
+    /// Handle click in model selector dialog
+    fn handle_model_selector_click(&mut self, x: u16, y: u16) -> Option<Effect> {
+        use crate::ui::components::ModelSelectorItem;
+
+        // Calculate dialog dimensions (must match model_selector.rs render logic)
+        let terminal_size = crossterm::terminal::size().unwrap_or((80, 24));
+        let screen_width = terminal_size.0;
+        let screen_height = terminal_size.1;
+
+        let content_height = self.state.model_selector_state.items.len() as u16 + 4;
+        let dialog_height = content_height.min(screen_height.saturating_sub(4));
+        let dialog_width: u16 = 40;
+
+        // Calculate dialog position (aligned with status bar)
+        let (dialog_x, dialog_y) = if let Some(sb_area) = self.state.status_bar_area {
+            let dx = sb_area.x;
+            let dy = sb_area.y.saturating_sub(dialog_height);
+            (dx, dy)
+        } else {
+            let dx = (screen_width.saturating_sub(dialog_width)) / 2;
+            let dy = (screen_height.saturating_sub(dialog_height)) / 2;
+            (dx, dy)
+        };
+
+        // Ensure dialog stays within screen bounds
+        let dialog_x = dialog_x.min(screen_width.saturating_sub(dialog_width));
+
+        // Check if click is outside dialog - close it
+        if x < dialog_x
+            || x >= dialog_x + dialog_width
+            || y < dialog_y
+            || y >= dialog_y + dialog_height
+        {
+            self.state.model_selector_state.hide();
+            self.state.input_mode = InputMode::Normal;
+            return None;
+        }
+
+        // Inner area (accounting for border and padding)
+        let inner_x = dialog_x + 2; // border + padding
+        let inner_y = dialog_y + 1; // border
+        let inner_height = dialog_height.saturating_sub(2);
+
+        // Check if click is in the content area
+        if x < inner_x || y < inner_y || y >= inner_y + inner_height {
+            return None;
+        }
+
+        // Map y position to item index
+        // The items render with section headers and spacing
+        let relative_y = (y - inner_y) as usize;
+
+        // Walk through items to find which one was clicked
+        let mut current_row: usize = 0;
+        let mut clicked_selectable_idx: Option<usize> = None;
+
+        for (item_idx, item) in self.state.model_selector_state.items.iter().enumerate() {
+            match item {
+                ModelSelectorItem::SectionHeader(_) => {
+                    // Section headers have spacing before them (except first)
+                    if item_idx > 0 {
+                        current_row += 1; // spacing line
+                    }
+                    if current_row == relative_y {
+                        // Clicked on section header - do nothing
+                        return None;
+                    }
+                    current_row += 1; // header line
+                }
+                ModelSelectorItem::Model(_) => {
+                    if current_row == relative_y {
+                        // Find which selectable index this corresponds to
+                        for (sel_idx, &sel_item_idx) in
+                            self.state.model_selector_state.selectable_indices.iter().enumerate()
+                        {
+                            if sel_item_idx == item_idx {
+                                clicked_selectable_idx = Some(sel_idx);
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    current_row += 1;
+                }
+            }
+
+            if current_row > relative_y {
+                break;
+            }
+        }
+
+        // If a model was clicked, select it and apply
+        if let Some(sel_idx) = clicked_selectable_idx {
+            self.state.model_selector_state.selected = sel_idx;
+
+            // Apply the selection (same logic as Enter key)
+            if let Some(model) = self.state.model_selector_state.selected_model().cloned() {
+                if let Some(session) = self.state.tab_manager.active_session_mut() {
+                    let agent_changed = session.agent_type != model.agent_type;
+                    session.model = Some(model.id.clone());
+                    session.agent_type = model.agent_type;
+                    session.update_status();
+
+                    // Add system message about the change
+                    let msg = if agent_changed {
+                        format!(
+                            "Switched to {} with model: {}",
+                            model.agent_type, model.display_name
+                        )
+                    } else {
+                        format!("Model changed to: {}", model.display_name)
+                    };
+                    let display = MessageDisplay::System { content: msg };
+                    session.chat_view.push(display.to_chat_message());
+                }
+            }
+            self.state.model_selector_state.hide();
+            self.state.input_mode = InputMode::Normal;
+        }
+
+        None
     }
 
     /// Handle click in project picker dialog
@@ -3434,7 +3567,12 @@ impl App {
         // Draw model selector dialog if open
         if self.state.model_selector_state.is_visible() {
             let model_selector = ModelSelector::new();
-            model_selector.render(size, f.buffer_mut(), &self.state.model_selector_state);
+            model_selector.render(
+                size,
+                f.buffer_mut(),
+                &self.state.model_selector_state,
+                self.state.status_bar_area,
+            );
         }
 
         // Draw base directory dialog if open
