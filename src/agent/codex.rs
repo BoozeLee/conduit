@@ -42,37 +42,37 @@ impl CodexCliRunner {
     fn build_command(&self, config: &AgentStartConfig) -> Command {
         let mut cmd = Command::new(&self.binary_path);
 
-        // Use exec subcommand for headless mode
-        if let Some(session_id) = &config.resume_session {
-            // Resume existing session
-            cmd.arg("exec").arg("resume").arg(session_id.as_str());
-            if !config.prompt.is_empty() {
-                cmd.arg(&config.prompt);
-            }
-        } else {
-            // New session
-            cmd.arg("exec");
-            cmd.arg(&config.prompt);
-        }
+        // Start with exec subcommand
+        cmd.arg("exec");
 
-        // JSON output mode
+        // Flags must come before positional arguments in Codex CLI
         cmd.arg("--json");
-
-        // Full auto mode (no approval prompts)
         cmd.arg("--full-auto");
 
-        // Model selection
+        // Model selection (flag, so comes before positional args)
         if let Some(model) = &config.model {
             cmd.arg("-m").arg(model);
         }
 
-        // Working directory
-        cmd.current_dir(&config.working_dir);
-
-        // Additional args
+        // Additional args (assumed to be flags)
         for arg in &config.additional_args {
             cmd.arg(arg);
         }
+
+        // Now add positional arguments: resume/prompt
+        if let Some(session_id) = &config.resume_session {
+            // Resume existing session: exec [flags] resume <session_id> [prompt]
+            cmd.arg("resume").arg(session_id.as_str());
+            if !config.prompt.is_empty() {
+                cmd.arg(&config.prompt);
+            }
+        } else {
+            // New session: exec [flags] <prompt>
+            cmd.arg(&config.prompt);
+        }
+
+        // Working directory
+        cmd.current_dir(&config.working_dir);
 
         // Stdio setup
         cmd.stdin(Stdio::null());
