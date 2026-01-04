@@ -5,8 +5,8 @@ use ratatui::layout::Rect;
 
 use crate::ui::components::{
     AddRepoDialogState, AgentSelectorState, BaseDirDialogState, ConfirmationDialogState,
-    ErrorDialogState, HelpDialogState, ModelSelectorState, ProjectPickerState, SidebarData,
-    SidebarState, SplashScreen,
+    ErrorDialogState, HelpDialogState, ModelSelectorState, ProjectPickerState,
+    SessionImportPickerState, SidebarData, SidebarState, SplashScreen,
 };
 use crate::ui::events::{InputMode, ViewMode};
 use crate::ui::tab_manager::TabManager;
@@ -162,6 +162,7 @@ pub struct AppState {
     pub agent_selector_state: AgentSelectorState,
     pub base_dir_dialog_state: BaseDirDialogState,
     pub project_picker_state: ProjectPickerState,
+    pub session_import_state: SessionImportPickerState,
     pub confirmation_dialog_state: ConfirmationDialogState,
     pub error_dialog_state: ErrorDialogState,
     pub help_dialog_state: HelpDialogState,
@@ -197,6 +198,7 @@ impl AppState {
             agent_selector_state: AgentSelectorState::new(),
             base_dir_dialog_state: BaseDirDialogState::new(),
             project_picker_state: ProjectPickerState::new(),
+            session_import_state: SessionImportPickerState::new(),
             confirmation_dialog_state: ConfirmationDialogState::new(),
             error_dialog_state: ErrorDialogState::new(),
             help_dialog_state: HelpDialogState::new(),

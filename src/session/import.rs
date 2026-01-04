@@ -1,0 +1,613 @@
+//! Session discovery and import utilities
+//!
+//! Provides functions to discover sessions from Claude Code and Codex CLI,
+//! and parse them for display in the import picker.
+
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+
+use chrono::{DateTime, TimeZone, Utc};
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::agent::AgentType;
+
+/// A session discovered from an external agent
+#[derive(Debug, Clone)]
+pub struct ExternalSession {
+    /// Unique identifier (session file UUID)
+    pub id: String,
+    /// Agent type (Claude or Codex)
+    pub agent_type: AgentType,
+    /// Display text (first message or summary)
+    pub display: String,
+    /// Project path (if available)
+    pub project: Option<String>,
+    /// Session timestamp
+    pub timestamp: DateTime<Utc>,
+    /// Number of messages in the session
+    pub message_count: usize,
+    /// Path to the session file
+    pub file_path: PathBuf,
+}
+
+impl ExternalSession {
+    /// Get a relative time string (e.g., "2 hours ago")
+    pub fn relative_time(&self) -> String {
+        let now = Utc::now();
+        let duration = now.signed_duration_since(self.timestamp);
+
+        let minutes = duration.num_minutes();
+        let hours = duration.num_hours();
+        let days = duration.num_days();
+
+        if minutes < 1 {
+            "just now".to_string()
+        } else if minutes < 60 {
+            format!("{} min ago", minutes)
+        } else if hours < 24 {
+            if hours == 1 {
+                "1 hour ago".to_string()
+            } else {
+                format!("{} hours ago", hours)
+            }
+        } else if days == 1 {
+            "Yesterday".to_string()
+        } else if days < 7 {
+            format!("{} days ago", days)
+        } else if days < 30 {
+            format!("{} weeks ago", days / 7)
+        } else if days < 365 {
+            format!("{} months ago", days / 30)
+        } else {
+            format!("{} years ago", days / 365)
+        }
+    }
+
+    /// Get a truncated display string
+    pub fn truncated_display(&self, max_len: usize) -> String {
+        let cleaned: String = self
+            .display
+            .chars()
+            .filter(|c| !c.is_control() || *c == ' ')
+            .collect();
+
+        if cleaned.len() <= max_len {
+            cleaned
+        } else {
+            format!("{}...", &cleaned[..max_len.saturating_sub(3)])
+        }
+    }
+
+    /// Get the project name (last component of path)
+    pub fn project_name(&self) -> Option<String> {
+        self.project.as_ref().and_then(|p| {
+            PathBuf::from(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        })
+    }
+}
+
+/// Entry from Claude's history.jsonl index file
+#[derive(Debug, Deserialize)]
+struct ClaudeHistoryEntry {
+    display: String,
+    timestamp: i64,
+    project: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+/// Discover all sessions from both Claude Code and Codex CLI
+pub fn discover_all_sessions() -> Vec<ExternalSession> {
+    let mut sessions = Vec::new();
+    sessions.extend(discover_claude_sessions());
+    sessions.extend(discover_codex_sessions());
+
+    // Sort by timestamp descending (most recent first)
+    sessions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    sessions
+}
+
+/// Discover Claude Code sessions from ~/.claude/
+pub fn discover_claude_sessions() -> Vec<ExternalSession> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Vec::new(),
+    };
+
+    let claude_dir = home.join(".claude");
+    if !claude_dir.exists() {
+        return Vec::new();
+    }
+
+    // Try to read the history index first
+    let history_file = claude_dir.join("history.jsonl");
+    if history_file.exists() {
+        if let Ok(sessions) = discover_claude_from_history(&history_file, &claude_dir) {
+            return sessions;
+        }
+    }
+
+    // Fallback: scan project directories directly
+    discover_claude_from_projects(&claude_dir)
+}
+
+/// Discover Claude sessions using the history.jsonl index
+fn discover_claude_from_history(
+    history_file: &PathBuf,
+    claude_dir: &PathBuf,
+) -> Result<Vec<ExternalSession>, std::io::Error> {
+    let file = File::open(history_file)?;
+    let reader = BufReader::new(file);
+    let mut sessions = Vec::new();
+    let mut seen_sessions = std::collections::HashSet::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        if let Ok(entry) = serde_json::from_str::<ClaudeHistoryEntry>(&line) {
+            // Skip if we've already seen this session
+            if let Some(ref session_id) = entry.session_id {
+                if seen_sessions.contains(session_id) {
+                    continue;
+                }
+                seen_sessions.insert(session_id.clone());
+            }
+
+            // Try to find the session file
+            if let Some(ref project) = entry.project {
+                let encoded_path = encode_project_path(project);
+                let project_dir = claude_dir.join("projects").join(&encoded_path);
+
+                if project_dir.exists() {
+                    // Find session files in this project directory
+                    if let Ok(entries) = fs::read_dir(&project_dir) {
+                        for file_entry in entries.flatten() {
+                            let path = file_entry.path();
+                            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                                let file_name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+
+                                // Skip if already seen
+                                if seen_sessions.contains(file_name) {
+                                    continue;
+                                }
+
+                                // Check if this matches the session_id or is a recent file
+                                let matches_session = entry.session_id.as_ref()
+                                    .map(|id| file_name.contains(id))
+                                    .unwrap_or(false);
+
+                                // Use file metadata for timestamp if not matching
+                                if matches_session || entry.session_id.is_none() {
+                                    let (message_count, first_message) = peek_session_file(&path);
+
+                                    let display = if !first_message.is_empty() {
+                                        first_message
+                                    } else {
+                                        entry.display.clone()
+                                    };
+
+                                    let timestamp = Utc.timestamp_millis_opt(entry.timestamp)
+                                        .single()
+                                        .unwrap_or_else(Utc::now);
+
+                                    seen_sessions.insert(file_name.to_string());
+
+                                    sessions.push(ExternalSession {
+                                        id: file_name.to_string(),
+                                        agent_type: AgentType::Claude,
+                                        display,
+                                        project: Some(project.clone()),
+                                        timestamp,
+                                        message_count,
+                                        file_path: path,
+                                    });
+
+                                    if matches_session {
+                                        break; // Found the matching session
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(sessions)
+}
+
+/// Discover Claude sessions by scanning project directories
+fn discover_claude_from_projects(claude_dir: &PathBuf) -> Vec<ExternalSession> {
+    let projects_dir = claude_dir.join("projects");
+    if !projects_dir.exists() {
+        return Vec::new();
+    }
+
+    let mut sessions = Vec::new();
+
+    if let Ok(project_entries) = fs::read_dir(&projects_dir) {
+        for project_entry in project_entries.flatten() {
+            let project_path = project_entry.path();
+            if !project_path.is_dir() {
+                continue;
+            }
+
+            let project_name = decode_project_path(
+                project_path.file_name().and_then(|n| n.to_str()).unwrap_or("")
+            );
+
+            if let Ok(session_entries) = fs::read_dir(&project_path) {
+                for session_entry in session_entries.flatten() {
+                    let session_path = session_entry.path();
+                    if session_path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                        continue;
+                    }
+
+                    let session_id = session_path
+                        .file_stem()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    // Get file modification time
+                    let timestamp = session_path
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .map(|t| DateTime::<Utc>::from(t))
+                        .unwrap_or_else(|_| Utc::now());
+
+                    let (message_count, first_message) = peek_session_file(&session_path);
+
+                    sessions.push(ExternalSession {
+                        id: session_id,
+                        agent_type: AgentType::Claude,
+                        display: first_message,
+                        project: if project_name.is_empty() { None } else { Some(project_name.clone()) },
+                        timestamp,
+                        message_count,
+                        file_path: session_path,
+                    });
+                }
+            }
+        }
+    }
+
+    sessions
+}
+
+/// Discover Codex CLI sessions from ~/.codex/sessions/
+pub fn discover_codex_sessions() -> Vec<ExternalSession> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Vec::new(),
+    };
+
+    let sessions_dir = home.join(".codex").join("sessions");
+    if !sessions_dir.exists() {
+        return Vec::new();
+    }
+
+    let mut sessions = Vec::new();
+
+    // Walk through YYYY/MM/DD directory structure
+    if let Ok(year_entries) = fs::read_dir(&sessions_dir) {
+        for year_entry in year_entries.flatten() {
+            let year_path = year_entry.path();
+            if !year_path.is_dir() {
+                continue;
+            }
+
+            if let Ok(month_entries) = fs::read_dir(&year_path) {
+                for month_entry in month_entries.flatten() {
+                    let month_path = month_entry.path();
+                    if !month_path.is_dir() {
+                        continue;
+                    }
+
+                    if let Ok(day_entries) = fs::read_dir(&month_path) {
+                        for day_entry in day_entries.flatten() {
+                            let day_path = day_entry.path();
+                            if !day_path.is_dir() {
+                                continue;
+                            }
+
+                            if let Ok(file_entries) = fs::read_dir(&day_path) {
+                                for file_entry in file_entries.flatten() {
+                                    let file_path = file_entry.path();
+                                    if file_path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                                        continue;
+                                    }
+
+                                    if let Some(session) = parse_codex_session_file(&file_path) {
+                                        sessions.push(session);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    sessions
+}
+
+/// Parse a Codex session file and extract metadata
+fn parse_codex_session_file(path: &PathBuf) -> Option<ExternalSession> {
+    let file = File::open(path).ok()?;
+    let reader = BufReader::new(file);
+
+    let mut message_count = 0;
+    let mut first_user_message = String::new();
+    let mut project: Option<String> = None;
+    let mut timestamp: Option<DateTime<Utc>> = None;
+
+    for line in reader.lines().take(100) { // Only read first 100 lines for efficiency
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let entry: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Try to extract timestamp from thread.started event
+        if timestamp.is_none() {
+            if let Some(ts_millis) = entry.get("timestamp").and_then(|t| t.as_i64()) {
+                timestamp = Utc.timestamp_millis_opt(ts_millis).single();
+            }
+        }
+
+        // Extract project from thread.started event
+        if project.is_none() {
+            if entry.get("type").and_then(|t| t.as_str()) == Some("event_msg") {
+                if let Some(payload) = entry.get("payload") {
+                    if payload.get("type").and_then(|t| t.as_str()) == Some("thread.started") {
+                        if let Some(cwd) = payload.get("cwd").and_then(|c| c.as_str()) {
+                            project = Some(cwd.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Count messages and get first user message
+        if entry.get("type").and_then(|t| t.as_str()) == Some("response_item") {
+            if let Some(payload) = entry.get("payload") {
+                let role = payload.get("role").and_then(|r| r.as_str());
+
+                if role == Some("user") || role == Some("assistant") {
+                    message_count += 1;
+
+                    // Extract first user message for display
+                    if first_user_message.is_empty() && role == Some("user") {
+                        if let Some(content) = payload.get("content").and_then(|c| c.as_array()) {
+                            for block in content {
+                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                    // Skip system content
+                                    if !text.contains("<environment_context>")
+                                        && !text.starts_with("# AGENTS.md")
+                                        && !text.contains("<INSTRUCTIONS>")
+                                    {
+                                        first_user_message = text.to_string();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Skip sessions with no messages
+    if message_count == 0 {
+        return None;
+    }
+
+    // Extract session ID from filename (rollout-timestamp-uuid.jsonl)
+    let filename = path.file_stem().and_then(|n| n.to_str()).unwrap_or("unknown");
+    let session_id = filename
+        .strip_prefix("rollout-")
+        .and_then(|s| s.split('-').last())
+        .unwrap_or(filename)
+        .to_string();
+
+    // Use file modification time as fallback timestamp
+    let timestamp = timestamp.unwrap_or_else(|| {
+        path.metadata()
+            .and_then(|m| m.modified())
+            .map(|t| DateTime::<Utc>::from(t))
+            .unwrap_or_else(|_| Utc::now())
+    });
+
+    Some(ExternalSession {
+        id: session_id,
+        agent_type: AgentType::Codex,
+        display: if first_user_message.is_empty() {
+            "(No message)".to_string()
+        } else {
+            first_user_message
+        },
+        project,
+        timestamp,
+        message_count,
+        file_path: path.clone(),
+    })
+}
+
+/// Peek at a Claude session file to get message count and first user message
+fn peek_session_file(path: &PathBuf) -> (usize, String) {
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (0, String::new()),
+    };
+    let reader = BufReader::new(file);
+
+    let mut message_count = 0;
+    let mut first_user_message = String::new();
+
+    for line in reader.lines().take(50) { // Only peek first 50 lines
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let entry: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let entry_type = entry.get("type").and_then(|t| t.as_str());
+
+        if entry_type == Some("user") || entry_type == Some("assistant") {
+            message_count += 1;
+
+            // Get first user message for display
+            if first_user_message.is_empty() && entry_type == Some("user") {
+                if let Some(message) = entry.get("message") {
+                    if let Some(content) = message.get("content") {
+                        if let Some(text) = content.as_str() {
+                            first_user_message = text.to_string();
+                        } else if let Some(blocks) = content.as_array() {
+                            for block in blocks {
+                                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                        first_user_message = text.to_string();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (message_count, first_user_message)
+}
+
+/// Encode a project path for Claude's directory naming scheme
+/// e.g., /Users/foo/bar -> -Users-foo-bar
+fn encode_project_path(path: &str) -> String {
+    path.replace('/', "-")
+}
+
+/// Decode a Claude project directory name back to a path
+/// e.g., -Users-foo-bar -> /Users/foo/bar
+fn decode_project_path(encoded: &str) -> String {
+    if encoded.starts_with('-') {
+        encoded.replacen('-', "/", 1).replace('-', "/")
+    } else {
+        encoded.replace('-', "/")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_project_path() {
+        assert_eq!(encode_project_path("/Users/foo/bar"), "-Users-foo-bar");
+        assert_eq!(encode_project_path("/home/user/project"), "-home-user-project");
+    }
+
+    #[test]
+    fn test_decode_project_path() {
+        assert_eq!(decode_project_path("-Users-foo-bar"), "/Users/foo/bar");
+        assert_eq!(decode_project_path("-home-user-project"), "/home/user/project");
+    }
+
+    #[test]
+    fn test_relative_time() {
+        let now = Utc::now();
+
+        let session = ExternalSession {
+            id: "test".to_string(),
+            agent_type: AgentType::Claude,
+            display: "test".to_string(),
+            project: None,
+            timestamp: now,
+            message_count: 1,
+            file_path: PathBuf::new(),
+        };
+        assert_eq!(session.relative_time(), "just now");
+
+        let session = ExternalSession {
+            id: "test".to_string(),
+            agent_type: AgentType::Claude,
+            display: "test".to_string(),
+            project: None,
+            timestamp: now - chrono::Duration::hours(2),
+            message_count: 1,
+            file_path: PathBuf::new(),
+        };
+        assert_eq!(session.relative_time(), "2 hours ago");
+
+        let session = ExternalSession {
+            id: "test".to_string(),
+            agent_type: AgentType::Claude,
+            display: "test".to_string(),
+            project: None,
+            timestamp: now - chrono::Duration::days(1),
+            message_count: 1,
+            file_path: PathBuf::new(),
+        };
+        assert_eq!(session.relative_time(), "Yesterday");
+    }
+
+    #[test]
+    fn test_truncated_display() {
+        let session = ExternalSession {
+            id: "test".to_string(),
+            agent_type: AgentType::Claude,
+            display: "This is a very long message that should be truncated".to_string(),
+            project: None,
+            timestamp: Utc::now(),
+            message_count: 1,
+            file_path: PathBuf::new(),
+        };
+
+        let truncated = session.truncated_display(20);
+        assert!(truncated.len() <= 20);
+        assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_project_name() {
+        let session = ExternalSession {
+            id: "test".to_string(),
+            agent_type: AgentType::Claude,
+            display: "test".to_string(),
+            project: Some("/Users/foo/my-project".to_string()),
+            timestamp: Utc::now(),
+            message_count: 1,
+            file_path: PathBuf::new(),
+        };
+
+        assert_eq!(session.project_name(), Some("my-project".to_string()));
+    }
+}

@@ -31,6 +31,7 @@ pub fn default_keybindings() -> KeybindingConfig {
     bind(&mut config.global, "C-c", Action::InterruptAgent);
     bind(&mut config.global, "C-g", Action::ToggleViewMode);
     bind(&mut config.global, "C-o", Action::ShowModelSelector);
+    bind(&mut config.global, "M-i", Action::OpenSessionImport);
 
     // Readline shortcuts (work globally in input modes)
     bind(&mut config.global, "C-a", Action::MoveCursorStart);
@@ -246,6 +247,22 @@ pub fn default_keybindings() -> KeybindingConfig {
     bind(help, "C-b", Action::ScrollPageUp);
     bind(help, "C-f", Action::ScrollPageDown);
     help.insert(KeyCombo::new(KeyCode::Backspace, KeyModifiers::NONE), Action::Backspace);
+
+    // ========== Session Import Picker ==========
+    let session_import = config.context.entry(KeyContext::SessionImport).or_default();
+
+    session_import.insert(KeyCombo::new(KeyCode::Up, KeyModifiers::NONE), Action::SelectPrev);
+    session_import.insert(KeyCombo::new(KeyCode::Down, KeyModifiers::NONE), Action::SelectNext);
+    bind(session_import, "k", Action::SelectPrev);
+    bind(session_import, "j", Action::SelectNext);
+    bind(session_import, "C-j", Action::SelectNext);
+    bind(session_import, "C-k", Action::SelectPrev);
+    bind(session_import, "C-f", Action::SelectPageDown);
+    bind(session_import, "C-b", Action::SelectPageUp);
+    session_import.insert(KeyCombo::new(KeyCode::Tab, KeyModifiers::NONE), Action::CycleImportFilter);
+    session_import.insert(KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE), Action::ImportSession);
+    session_import.insert(KeyCombo::new(KeyCode::Esc, KeyModifiers::NONE), Action::Cancel);
+    session_import.insert(KeyCombo::new(KeyCode::Backspace, KeyModifiers::NONE), Action::Backspace);
 
     config
 }

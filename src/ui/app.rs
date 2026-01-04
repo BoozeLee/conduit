@@ -37,7 +37,8 @@ use crate::ui::app_state::AppState;
 use crate::ui::components::{
     AddRepoDialog, AgentSelector, BaseDirDialog, ChatMessage, ConfirmationContext,
     ConfirmationDialog, ConfirmationType, ErrorDialog, EventDirection, GlobalFooter, HelpDialog,
-    ModelSelector, ProcessingState, ProjectPicker, Sidebar, SidebarData, TabBar,
+    ModelSelector, ProcessingState, ProjectPicker, SessionImportPicker, Sidebar, SidebarData,
+    TabBar,
 };
 use crate::ui::effect::Effect;
 use crate::ui::events::{
@@ -533,6 +534,9 @@ impl App {
         // Tick confirmation dialog spinner (for loading state)
         self.state.confirmation_dialog_state.tick();
 
+        // Tick session import spinner (for loading state)
+        self.state.session_import_state.tick();
+
         if self.state.show_first_time_splash {
             // Animate splash screen
             self.state.splash_screen.tick();
@@ -583,6 +587,7 @@ impl App {
                     | InputMode::ShowingError
                     | InputMode::SelectingAgent
                     | InputMode::Confirming
+                    | InputMode::ImportingSession
             )
         {
             // Only enter command mode if the input box is empty
@@ -696,6 +701,26 @@ impl App {
                 if let Some(session) = self.state.tab_manager.active_session() {
                     self.state.model_selector_state.show(session.model.clone());
                     self.state.input_mode = InputMode::SelectingModel;
+                }
+            }
+            Action::OpenSessionImport => {
+                self.state.session_import_state.show();
+                self.state.input_mode = InputMode::ImportingSession;
+                // Trigger session discovery
+                effects.push(Effect::DiscoverSessions);
+            }
+            Action::ImportSession => {
+                if self.state.input_mode == InputMode::ImportingSession {
+                    if let Some(session) = self.state.session_import_state.selected_session().cloned() {
+                        self.state.session_import_state.hide();
+                        self.state.input_mode = InputMode::Normal;
+                        effects.push(Effect::ImportSession(session));
+                    }
+                }
+            }
+            Action::CycleImportFilter => {
+                if self.state.input_mode == InputMode::ImportingSession {
+                    self.state.session_import_state.cycle_filter();
                 }
             }
             Action::ToggleMetrics => {
@@ -959,6 +984,9 @@ impl App {
                 InputMode::PickingProject => {
                     self.state.project_picker_state.select_next();
                 }
+                InputMode::ImportingSession => {
+                    self.state.session_import_state.select_next();
+                }
                 _ => {}
             },
             Action::SelectPrev => match self.state.input_mode {
@@ -978,16 +1006,23 @@ impl App {
                 InputMode::PickingProject => {
                     self.state.project_picker_state.select_prev();
                 }
+                InputMode::ImportingSession => {
+                    self.state.session_import_state.select_prev();
+                }
                 _ => {}
             },
             Action::SelectPageDown => {
                 if self.state.input_mode == InputMode::PickingProject {
                     self.state.project_picker_state.page_down();
+                } else if self.state.input_mode == InputMode::ImportingSession {
+                    self.state.session_import_state.page_down();
                 }
             }
             Action::SelectPageUp => {
                 if self.state.input_mode == InputMode::PickingProject {
                     self.state.project_picker_state.page_up();
+                } else if self.state.input_mode == InputMode::ImportingSession {
+                    self.state.session_import_state.page_up();
                 }
             }
             Action::Confirm => match self.state.input_mode {
@@ -1179,6 +1214,10 @@ impl App {
                 }
                 InputMode::ShowingHelp => {
                     self.state.help_dialog_state.hide();
+                    self.state.input_mode = InputMode::Normal;
+                }
+                InputMode::ImportingSession => {
+                    self.state.session_import_state.hide();
                     self.state.input_mode = InputMode::Normal;
                 }
                 _ => {}
@@ -1739,6 +1778,24 @@ impl App {
                         let _ = clipboard.set_text(text);
                     }
                 }
+                Effect::DiscoverSessions => {
+                    use crate::session::discover_all_sessions;
+                    let event_tx = self.event_tx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let sessions = discover_all_sessions();
+                        let _ = event_tx.send(AppEvent::SessionsDiscovered { sessions });
+                    });
+                }
+                Effect::ImportSession(session) => {
+                    // Create a new tab with the session's agent type and working directory
+                    let agent_type = session.agent_type.clone();
+                    let working_dir = session.project.clone()
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| self.config.working_dir.clone());
+
+                    // Load the session history into a new tab
+                    self.create_imported_session_tab(agent_type, session.file_path.clone(), working_dir).await?;
+                }
             }
         }
 
@@ -1773,6 +1830,7 @@ impl App {
                 | KeyContext::ProjectPicker
                 | KeyContext::Command
                 | KeyContext::HelpDialog
+                | KeyContext::SessionImport
         )
     }
 
@@ -1813,6 +1871,9 @@ impl App {
             }
             InputMode::PickingProject => {
                 self.state.project_picker_state.insert_char(c);
+            }
+            InputMode::ImportingSession => {
+                self.state.session_import_state.insert_char(c);
             }
             _ => {}
         }
@@ -2368,6 +2429,67 @@ impl App {
         self.state.input_mode = InputMode::Normal;
     }
 
+    /// Create a new tab by importing an external session
+    async fn create_imported_session_tab(
+        &mut self,
+        agent_type: AgentType,
+        session_file: std::path::PathBuf,
+        working_dir: std::path::PathBuf,
+    ) -> anyhow::Result<()> {
+        // Extract session ID from the file path
+        let session_id = session_file
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Create a new session with working directory
+        let mut session = AgentSession::with_working_dir(agent_type.clone(), working_dir);
+        // Set the resume session ID so the agent can continue from this session
+        session.resume_session_id = Some(SessionId::from_string(&session_id));
+
+        // Load history based on agent type
+        match agent_type {
+            AgentType::Claude => {
+                if let Ok((msgs, debug_entries, file_path)) =
+                    load_claude_history_with_debug(&session_id)
+                {
+                    Self::populate_debug_from_history(
+                        &mut session.raw_events_view,
+                        &debug_entries,
+                        &file_path,
+                    );
+                    for msg in msgs {
+                        session.chat_view.push(msg);
+                    }
+                }
+            }
+            AgentType::Codex => {
+                if let Ok((msgs, debug_entries, file_path)) =
+                    load_codex_history_with_debug(&session_id)
+                {
+                    Self::populate_debug_from_history(
+                        &mut session.raw_events_view,
+                        &debug_entries,
+                        &file_path,
+                    );
+                    for msg in msgs {
+                        session.chat_view.push(msg);
+                    }
+                }
+            }
+        }
+
+        // Add the session to the tab manager
+        self.state.tab_manager.add_session(session);
+
+        // Switch to the new tab
+        let tab_count = self.state.tab_manager.sessions().len();
+        self.state.tab_manager.switch_to(tab_count.saturating_sub(1));
+
+        Ok(())
+    }
+
     fn record_chat_scroll(&mut self, lines: usize) {
         if lines > 0 {
             self.state.metrics.record_scroll_event(lines);
@@ -2378,6 +2500,8 @@ impl App {
         self.state.input_mode != InputMode::ShowingHelp
             && !(self.state.input_mode == InputMode::PickingProject
                 && self.state.project_picker_state.is_visible())
+            && !(self.state.input_mode == InputMode::ImportingSession
+                && self.state.session_import_state.is_visible())
     }
 
     fn flush_scroll_deltas(&mut self, pending_up: &mut usize, pending_down: &mut usize) {
@@ -2401,6 +2525,15 @@ impl App {
             }
             for _ in 0..*pending_down {
                 self.state.project_picker_state.select_next();
+            }
+        } else if self.state.input_mode == InputMode::ImportingSession
+            && self.state.session_import_state.is_visible()
+        {
+            for _ in 0..*pending_up {
+                self.state.session_import_state.select_prev();
+            }
+            for _ in 0..*pending_down {
+                self.state.session_import_state.select_next();
             }
         } else if let Some(session) = self.state.tab_manager.active_session_mut() {
             if *pending_up > 0 {
@@ -2431,6 +2564,10 @@ impl App {
                     && self.state.project_picker_state.is_visible()
                 {
                     self.state.project_picker_state.select_prev();
+                } else if self.state.input_mode == InputMode::ImportingSession
+                    && self.state.session_import_state.is_visible()
+                {
+                    self.state.session_import_state.select_prev();
                 } else if self.state.view_mode == ViewMode::RawEvents {
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
                         session.raw_events_view.scroll_up(3);
@@ -2449,6 +2586,10 @@ impl App {
                     && self.state.project_picker_state.is_visible()
                 {
                     self.state.project_picker_state.select_next();
+                } else if self.state.input_mode == InputMode::ImportingSession
+                    && self.state.session_import_state.is_visible()
+                {
+                    self.state.session_import_state.select_next();
                 } else if self.state.view_mode == ViewMode::RawEvents {
                     if let Some(raw_events_area) = self.state.raw_events_area {
                         let visible_height = raw_events_area.height.saturating_sub(2) as usize;
@@ -3082,6 +3223,9 @@ impl App {
                     }
                 }
             }
+            AppEvent::SessionsDiscovered { sessions } => {
+                self.state.session_import_state.load_sessions(sessions);
+            }
             _ => {}
         }
 
@@ -3713,6 +3857,12 @@ impl App {
         if self.state.project_picker_state.is_visible() {
             let picker = ProjectPicker::new();
             picker.render(size, f.buffer_mut(), &self.state.project_picker_state);
+        }
+
+        // Draw session import picker if open
+        if self.state.session_import_state.is_visible() {
+            let picker = SessionImportPicker::new();
+            picker.render(size, f.buffer_mut(), &self.state.session_import_state);
         }
 
         // Draw confirmation dialog if open

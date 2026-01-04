@@ -163,6 +163,14 @@ pub enum Action {
     /// Confirm agent selection
     SelectAgent,
 
+    // ========== Session Import ==========
+    /// Open session import picker
+    OpenSessionImport,
+    /// Import the selected session
+    ImportSession,
+    /// Cycle session import agent filter
+    CycleImportFilter,
+
     // ========== Command Mode ==========
     /// Show help dialog
     ShowHelp,
@@ -262,6 +270,11 @@ impl Action {
 
             // Agent
             Action::SelectAgent => "Select agent",
+
+            // Session import
+            Action::OpenSessionImport => "Import session",
+            Action::ImportSession => "Import selected",
+            Action::CycleImportFilter => "Cycle filter",
 
             // Command mode
             Action::ShowHelp => "Show help",

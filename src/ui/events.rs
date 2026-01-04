@@ -92,6 +92,11 @@ pub enum AppEvent {
     ProjectRemoved {
         result: RemoveProjectResult,
     },
+
+    /// External sessions discovered (Claude Code, Codex CLI)
+    SessionsDiscovered {
+        sessions: Vec<crate::session::ExternalSession>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +148,8 @@ pub enum InputMode {
     Command,
     /// Showing help dialog
     ShowingHelp,
+    /// Importing a session from external agent
+    ImportingSession,
 }
 
 /// View mode for the main content area
