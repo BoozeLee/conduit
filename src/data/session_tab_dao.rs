@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 /// Data access object for session tab operations
+#[derive(Clone)]
 pub struct SessionTabDao {
     conn: Arc<Mutex<Connection>>,
 }

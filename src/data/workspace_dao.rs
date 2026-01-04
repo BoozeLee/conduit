@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 /// Data access object for Workspace operations
+#[derive(Clone)]
 pub struct WorkspaceDao {
     conn: Arc<Mutex<Connection>>,
 }

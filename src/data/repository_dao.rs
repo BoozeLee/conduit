@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 /// Data access object for Repository operations
+#[derive(Clone)]
 pub struct RepositoryDao {
     conn: Arc<Mutex<Connection>>,
 }

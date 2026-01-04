@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, Result as SqliteResult};
 use std::sync::{Arc, Mutex};
 
 /// Data access object for app state (key-value store)
+#[derive(Clone)]
 pub struct AppStateDao {
     conn: Arc<Mutex<Connection>>,
 }

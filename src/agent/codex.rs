@@ -10,8 +10,8 @@ use tokio::sync::mpsc;
 use crate::agent::display::MessageDisplay;
 use crate::agent::error::AgentError;
 use crate::agent::events::{
-    AgentEvent, AssistantMessageEvent, CommandOutputEvent, ErrorEvent, SessionInitEvent,
-    ReasoningEvent, TokenUsage, TokenUsageEvent, ToolCompletedEvent, ToolStartedEvent,
+    AgentEvent, AssistantMessageEvent, CommandOutputEvent, ErrorEvent, ReasoningEvent,
+    SessionInitEvent, TokenUsage, TokenUsageEvent, ToolCompletedEvent, ToolStartedEvent,
     TurnCompletedEvent, TurnFailedEvent,
 };
 use crate::agent::runner::{AgentHandle, AgentRunner, AgentStartConfig, AgentType};
@@ -225,6 +225,12 @@ impl CodexCliRunner {
     fn convert_event_msg(payload: &Value) -> Option<AgentEvent> {
         let payload_type = payload.get("type").and_then(|t| t.as_str())?;
         match payload_type {
+            "agent_message" => payload.get("message").and_then(|m| m.as_str()).map(|text| {
+                AgentEvent::AssistantMessage(AssistantMessageEvent {
+                    text: text.to_string(),
+                    is_final: true,
+                })
+            }),
             "agent_reasoning" => payload.get("text").and_then(|t| t.as_str()).map(|text| {
                 AgentEvent::AssistantReasoning(ReasoningEvent {
                     text: text.to_string(),
@@ -342,13 +348,12 @@ impl CodexCliRunner {
 
         match item_type {
             "agent_message" | "message" => {
-                let text = item
-                    .details
-                    .get("text")
-                    .or_else(|| item.details.get("content"))
-                    .and_then(|v| v.as_str())?;
+                let text = Self::extract_text_content(&item.details);
+                if text.is_empty() {
+                    return None;
+                }
                 Some(AgentEvent::AssistantMessage(AssistantMessageEvent {
-                    text: text.to_string(),
+                    text,
                     is_final: true,
                 }))
             }
@@ -423,12 +428,19 @@ impl AgentRunner for CodexCliRunner {
             });
 
             let mut function_calls: HashMap<String, FunctionCallInfo> = HashMap::new();
+            let mut last_assistant_text: Option<String> = None;
 
             while let Some(raw_event) = raw_rx.recv().await {
                 if let Some((call_id, info)) = Self::extract_function_call_info(&raw_event) {
                     function_calls.insert(call_id, info);
                 }
                 if let Some(event) = Self::convert_event(&raw_event, &function_calls) {
+                    if let AgentEvent::AssistantMessage(msg) = &event {
+                        if last_assistant_text.as_deref() == Some(msg.text.as_str()) {
+                            continue;
+                        }
+                        last_assistant_text = Some(msg.text.clone());
+                    }
                     if tx.send(event).await.is_err() {
                         break;
                     }
