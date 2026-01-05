@@ -2169,6 +2169,27 @@ impl App {
             .position(|session| session.workspace_id == Some(workspace_id))
     }
 
+    /// Extract PR number from text containing a GitHub PR URL
+    /// Looks for patterns like "github.com/owner/repo/pull/123"
+    fn extract_pr_number_from_text(text: &str) -> Option<u32> {
+        // Look for GitHub PR URLs in the text
+        for word in text.split_whitespace() {
+            // Check if this word contains a GitHub PR URL
+            if let Some(pull_idx) = word.find("/pull/") {
+                // Extract the part after "/pull/"
+                let after_pull = &word[pull_idx + 6..];
+                // Parse the number (stop at any non-digit character)
+                let num_str: String = after_pull.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if !num_str.is_empty() {
+                    if let Ok(num) = num_str.parse::<u32>() {
+                        return Some(num);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Populate the debug pane with history loading debug entries
     fn populate_debug_from_history(
         raw_events_view: &mut crate::ui::components::RawEventsView,
@@ -3381,6 +3402,13 @@ impl App {
                 let token_estimate = (msg.text.len() / 4).max(1);
                 session.add_streaming_tokens(token_estimate);
 
+                // Check for PR URL in the message and capture PR number
+                if session.pr_number.is_none() {
+                    if let Some(pr_num) = Self::extract_pr_number_from_text(&msg.text) {
+                        session.pr_number = Some(pr_num);
+                    }
+                }
+
                 if msg.is_final {
                     let display = MessageDisplay::Assistant {
                         content: msg.text,
@@ -3445,6 +3473,13 @@ impl App {
                 session.chat_view.push(display.to_chat_message());
             }
             AgentEvent::CommandOutput(cmd) => {
+                // Check for PR URL in command output (e.g., from gh pr create)
+                if session.pr_number.is_none() {
+                    if let Some(pr_num) = Self::extract_pr_number_from_text(&cmd.output) {
+                        session.pr_number = Some(pr_num);
+                    }
+                }
+
                 let display = MessageDisplay::Tool {
                     name: "Bash".to_string(),
                     args: cmd.command.clone(),
