@@ -123,7 +123,6 @@ impl AgentSession {
         self.status_bar
             .set_session_id(self.agent_session_id.clone());
         self.status_bar.set_token_usage(self.total_usage.clone());
-        self.status_bar.set_processing(self.is_processing);
 
         // Update project info for right side of status bar
         if let Some(working_dir) = &self.working_dir {
@@ -198,9 +197,8 @@ impl AgentSession {
         self.thinking_indicator.set_state(state);
     }
 
-    /// Advance spinner animation (called on tick)
+    /// Advance animation (called on tick)
     pub fn tick(&mut self) {
-        self.status_bar.tick();
         if self.is_processing {
             self.thinking_indicator.tick();
         }
