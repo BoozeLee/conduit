@@ -60,6 +60,23 @@ pub const AGENT_CLAUDE: Color = Color::Rgb(130, 180, 220);
 pub const AGENT_CODEX: Color = Color::Rgb(180, 140, 200);
 
 // =============================================================================
+// Knight Rider Spinner Colors (gradient trail)
+// =============================================================================
+
+/// Spinner active position - brightest
+pub const SPINNER_ACTIVE: Color = ACCENT_PRIMARY;
+/// Spinner trail position 1 - bright trail
+pub const SPINNER_TRAIL_1: Color = Color::Rgb(110, 145, 220);
+/// Spinner trail position 2 - medium trail
+pub const SPINNER_TRAIL_2: Color = Color::Rgb(90, 120, 185);
+/// Spinner trail position 3 - dim trail
+pub const SPINNER_TRAIL_3: Color = Color::Rgb(70, 95, 150);
+/// Spinner trail position 4 - faint trail
+pub const SPINNER_TRAIL_4: Color = Color::Rgb(50, 70, 115);
+/// Spinner inactive position
+pub const SPINNER_INACTIVE: Color = TEXT_MUTED;
+
+// =============================================================================
 // Border Colors
 // =============================================================================
 

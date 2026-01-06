@@ -10,6 +10,7 @@ mod global_footer;
 mod help_dialog;
 mod input_box;
 mod key_hints;
+mod knight_rider_spinner;
 mod markdown;
 mod model_selector;
 mod path_input;
@@ -42,7 +43,8 @@ pub use error_dialog::{ErrorDialog, ErrorDialogState};
 pub use global_footer::{FooterContext, GlobalFooter};
 pub use help_dialog::{HelpCategory, HelpDialog, HelpDialogState, KeybindingEntry};
 pub use input_box::InputBox;
-pub use key_hints::{render_key_hints, KeyHintBarStyle};
+pub use key_hints::{render_key_hints, render_key_hints_responsive, KeyHintBarStyle};
+pub use knight_rider_spinner::KnightRiderSpinner;
 pub use markdown::MarkdownRenderer;
 pub use model_selector::{ModelSelector, ModelSelectorItem, ModelSelectorState};
 pub use path_input::PathInputState;
@@ -82,6 +84,13 @@ pub use theme::{
     KEY_HINT_BG,
     SELECTED_BG,
     SELECTED_BG_DIM,
+    // Knight Rider spinner colors
+    SPINNER_ACTIVE,
+    SPINNER_INACTIVE,
+    SPINNER_TRAIL_1,
+    SPINNER_TRAIL_2,
+    SPINNER_TRAIL_3,
+    SPINNER_TRAIL_4,
     STATUS_BAR_BG,
     TAB_BAR_BG,
     TEXT_BRIGHT,

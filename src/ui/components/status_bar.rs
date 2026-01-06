@@ -5,13 +5,12 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Paragraph, Widget},
 };
 
 use crate::agent::{AgentType, ModelRegistry, SessionId, TokenUsage};
 use crate::ui::components::{
-    Spinner, ACCENT_ERROR, ACCENT_SUCCESS, ACCENT_WARNING, STATUS_BAR_BG, TEXT_BRIGHT, TEXT_FAINT,
-    TEXT_MUTED,
+    Spinner, ACCENT_ERROR, ACCENT_PRIMARY, ACCENT_SUCCESS, ACCENT_WARNING, STATUS_BAR_BG,
+    TEXT_BRIGHT, TEXT_FAINT, TEXT_MUTED,
 };
 
 /// Status bar component showing session info
@@ -25,6 +24,12 @@ pub struct StatusBar {
     spinner: Spinner,
     /// Whether to show performance metrics
     show_metrics: bool,
+    /// Repository name (from git remote or directory)
+    repo_name: Option<String>,
+    /// Current git branch
+    branch_name: Option<String>,
+    /// Working directory folder name
+    folder_name: Option<String>,
     /// Time spent in draw()
     draw_time: Duration,
     /// Time spent processing events
@@ -54,6 +59,9 @@ impl StatusBar {
             is_processing: false,
             spinner: Spinner::dots(),
             show_metrics: false,
+            repo_name: None,
+            branch_name: None,
+            folder_name: None,
             draw_time: Duration::ZERO,
             event_time: Duration::ZERO,
             fps: 0.0,
@@ -91,6 +99,18 @@ impl StatusBar {
 
     pub fn set_processing(&mut self, processing: bool) {
         self.is_processing = processing;
+    }
+
+    /// Set project info for right side of status bar
+    pub fn set_project_info(
+        &mut self,
+        repo: Option<String>,
+        branch: Option<String>,
+        folder: Option<String>,
+    ) {
+        self.repo_name = repo;
+        self.branch_name = branch;
+        self.folder_name = folder;
     }
 
     /// Set performance metrics for display
@@ -237,9 +257,87 @@ impl StatusBar {
             ));
         }
 
-        let line = Line::from(spans);
-        let paragraph = Paragraph::new(line).style(Style::default().bg(STATUS_BAR_BG));
+        // Build right-side spans (project info)
+        let right_spans = self.build_project_info_spans();
 
-        paragraph.render(area, buf);
+        // Render with split layout
+        self.render_split_line(area, buf, spans, right_spans);
+    }
+
+    /// Build project info spans for right side of status bar
+    /// Format: repo · branch · ~ folder
+    fn build_project_info_spans(&self) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+
+        if let Some(repo) = &self.repo_name {
+            // Repo name - bright like model
+            spans.push(Span::styled(repo.clone(), Style::default().fg(TEXT_BRIGHT)));
+
+            // Separator
+            spans.push(Span::styled(" · ", Style::default().fg(TEXT_FAINT)));
+
+            // Branch name - muted like agent
+            if let Some(branch) = &self.branch_name {
+                spans.push(Span::styled(
+                    branch.clone(),
+                    Style::default().fg(TEXT_MUTED),
+                ));
+            } else {
+                spans.push(Span::styled("(no branch)", Style::default().fg(TEXT_MUTED)));
+            }
+
+            // Separator
+            spans.push(Span::styled(" · ", Style::default().fg(TEXT_FAINT)));
+
+            // Tilde with accent
+            spans.push(Span::styled("~ ", Style::default().fg(ACCENT_PRIMARY)));
+
+            // Folder name - muted
+            if let Some(folder) = &self.folder_name {
+                spans.push(Span::styled(
+                    folder.clone(),
+                    Style::default().fg(TEXT_MUTED),
+                ));
+            }
+
+            // Trailing padding
+            spans.push(Span::raw("  "));
+        }
+
+        spans
+    }
+
+    /// Render status bar with left and right content
+    fn render_split_line(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        left_spans: Vec<Span<'static>>,
+        right_spans: Vec<Span<'static>>,
+    ) {
+        // Fill background
+        buf.set_style(area, Style::default().bg(STATUS_BAR_BG));
+
+        // Calculate widths
+        let left_width: usize = left_spans.iter().map(|s| s.width()).sum();
+        let right_width: usize = right_spans.iter().map(|s| s.width()).sum();
+        let total_width = area.width as usize;
+
+        // Render left content
+        let left_line = Line::from(left_spans);
+        let left_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: (left_width as u16).min(area.width),
+            height: 1,
+        };
+        buf.set_line(left_area.x, left_area.y, &left_line, left_area.width);
+
+        // Render right content (if it fits)
+        if !right_spans.is_empty() && right_width < total_width {
+            let right_x = area.x + (total_width - right_width) as u16;
+            let right_line = Line::from(right_spans);
+            buf.set_line(right_x, area.y, &right_line, right_width as u16);
+        }
     }
 }

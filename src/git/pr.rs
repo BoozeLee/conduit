@@ -40,6 +40,48 @@ struct GhPrView {
 pub struct PrManager;
 
 impl PrManager {
+    /// Get repository name from git remote URL or directory name
+    pub fn get_repo_name(working_dir: &Path) -> Option<String> {
+        // Try git remote origin URL first
+        let output = Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .current_dir(working_dir)
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if let Some(name) = Self::parse_repo_name_from_url(&url) {
+                return Some(name);
+            }
+        }
+
+        // Fallback to directory name
+        working_dir.file_name()?.to_str().map(String::from)
+    }
+
+    /// Parse repository name from git remote URL
+    /// Handles HTTPS (github.com/user/repo.git) and SSH (git@github.com:user/repo.git) formats
+    fn parse_repo_name_from_url(url: &str) -> Option<String> {
+        // Remove .git suffix if present
+        let url = url.strip_suffix(".git").unwrap_or(url);
+
+        // Try HTTPS format: https://github.com/user/repo
+        if let Some(path) = url.strip_prefix("https://") {
+            return path.split('/').last().map(String::from);
+        }
+
+        // Try SSH format: git@github.com:user/repo
+        if url.starts_with("git@") {
+            if let Some(path) = url.split(':').nth(1) {
+                return path.split('/').last().map(String::from);
+            }
+        }
+
+        // Fallback: just take the last path component
+        url.split('/').last().map(String::from)
+    }
+
     /// Check if GitHub CLI (gh) is installed
     pub fn is_gh_installed() -> bool {
         Command::new("gh")

@@ -584,6 +584,9 @@ impl App {
         // Tick session import spinner (for loading state)
         self.state.session_import_state.tick();
 
+        // Tick footer Knight Rider spinner
+        self.state.tick_footer_spinner();
+
         if let Some(session) = self.state.tab_manager.active_session_mut() {
             session.tick();
         }
@@ -4396,7 +4399,9 @@ impl App {
                     } else {
                         FooterContext::Empty
                     };
-                    let footer = GlobalFooter::for_context(footer_context);
+                    let footer = GlobalFooter::for_context(footer_context)
+                        .with_spinner(self.state.footer_spinner.as_ref())
+                        .with_message(self.state.footer_message.as_deref());
                     footer.render(chunks[2], f.buffer_mut());
 
                     return;
@@ -4584,7 +4589,9 @@ impl App {
                     self.state.view_mode,
                     self.state.input_mode,
                     !self.state.tab_manager.is_empty(),
-                );
+                )
+                .with_spinner(self.state.footer_spinner.as_ref())
+                .with_message(self.state.footer_message.as_deref());
                 footer.render(footer_area, f.buffer_mut());
             }
             ViewMode::RawEvents => {
@@ -4649,7 +4656,9 @@ impl App {
                     self.state.view_mode,
                     self.state.input_mode,
                     !self.state.tab_manager.is_empty(),
-                );
+                )
+                .with_spinner(self.state.footer_spinner.as_ref())
+                .with_message(self.state.footer_message.as_deref());
                 footer.render(footer_area, f.buffer_mut());
             }
         }

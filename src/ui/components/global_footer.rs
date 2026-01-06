@@ -1,6 +1,12 @@
-use ratatui::{buffer::Buffer, layout::Rect};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::Style,
+    text::{Line, Span},
+};
 
-use crate::ui::components::{render_key_hints, KeyHintBarStyle};
+use super::KnightRiderSpinner;
+use crate::ui::components::{render_key_hints_responsive, KeyHintBarStyle, TEXT_MUTED};
 use crate::ui::events::{InputMode, ViewMode};
 
 /// Context for determining which footer hints to show
@@ -38,14 +44,19 @@ impl FooterContext {
 }
 
 /// Global footer showing keyboard shortcuts in minimal style
-pub struct GlobalFooter {
+/// Layout: [Spinner][Message]                    [Key Hints (right-aligned)]
+pub struct GlobalFooter<'a> {
     hints: Vec<(&'static str, &'static str)>,
+    spinner: Option<&'a KnightRiderSpinner>,
+    message: Option<&'a str>,
 }
 
-impl GlobalFooter {
+impl<'a> GlobalFooter<'a> {
     pub fn new() -> Self {
         Self {
             hints: Self::chat_hints(),
+            spinner: None,
+            message: None,
         }
     }
 
@@ -58,6 +69,8 @@ impl GlobalFooter {
                 FooterContext::Sidebar => Self::sidebar_hints(),
                 FooterContext::RawEvents => Self::raw_events_hints(),
             },
+            spinner: None,
+            message: None,
         }
     }
 
@@ -65,6 +78,18 @@ impl GlobalFooter {
     pub fn from_state(view_mode: ViewMode, input_mode: InputMode, has_tabs: bool) -> Self {
         let context = FooterContext::from_state(view_mode, input_mode, has_tabs);
         Self::for_context(context)
+    }
+
+    /// Set spinner for left side of footer
+    pub fn with_spinner(mut self, spinner: Option<&'a KnightRiderSpinner>) -> Self {
+        self.spinner = spinner;
+        self
+    }
+
+    /// Set message for left side of footer (after spinner)
+    pub fn with_message(mut self, message: Option<&'a str>) -> Self {
+        self.message = message;
+        self
     }
 
     /// Get hints for empty state (no tabs open)
@@ -114,11 +139,50 @@ impl GlobalFooter {
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
-        render_key_hints(area, buf, &self.hints, KeyHintBarStyle::minimal_footer());
+        // Build left side content (spinner + message)
+        let mut left_spans: Vec<Span> = Vec::new();
+
+        // Add spinner if present
+        if let Some(spinner) = self.spinner {
+            left_spans.push(Span::raw("  "));
+            left_spans.extend(spinner.render());
+        }
+
+        // Add message if present
+        if let Some(message) = self.message {
+            if !left_spans.is_empty() {
+                left_spans.push(Span::raw("  ")); // Gap between spinner and message
+            } else {
+                left_spans.push(Span::raw("  ")); // Leading space
+            }
+            left_spans.push(Span::styled(message, Style::default().fg(TEXT_MUTED)));
+        }
+
+        // Calculate left side width
+        let left_width: u16 = left_spans.iter().map(|s| s.width() as u16).sum();
+
+        // Render left side if present
+        if !left_spans.is_empty() {
+            let left_line = Line::from(left_spans);
+            buf.set_line(area.x, area.y, &left_line, left_width);
+        }
+
+        // Reserve space for spinner/message, key hints get the rest (right-aligned)
+        let reserved_left = if left_width > 0 { left_width + 2 } else { 0 }; // +2 for gap
+        let max_hints_width = area.width.saturating_sub(reserved_left);
+
+        // Render key hints responsively (right-aligned, removes from left when too wide)
+        render_key_hints_responsive(
+            area,
+            buf,
+            &self.hints,
+            KeyHintBarStyle::minimal_footer(),
+            Some(max_hints_width),
+        );
     }
 }
 
-impl Default for GlobalFooter {
+impl Default for GlobalFooter<'_> {
     fn default() -> Self {
         Self::new()
     }

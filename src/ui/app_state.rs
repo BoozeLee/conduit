@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 
 use crate::ui::components::{
     AddRepoDialogState, AgentSelectorState, BaseDirDialogState, ConfirmationDialogState,
-    ErrorDialogState, HelpDialogState, ModelSelectorState, ProjectPickerState,
+    ErrorDialogState, HelpDialogState, KnightRiderSpinner, ModelSelectorState, ProjectPickerState,
     SessionImportPickerState, SidebarData, SidebarState,
 };
 use crate::ui::events::{InputMode, ViewMode};
@@ -179,6 +179,10 @@ pub struct AppState {
     pub last_sidebar_click: Option<(Instant, usize)>,
     pub last_raw_events_click: Option<(Instant, usize)>,
     pub scroll_drag: Option<ScrollDragTarget>,
+    /// Knight Rider spinner for footer (shown during global processing)
+    pub footer_spinner: Option<KnightRiderSpinner>,
+    /// Message to display in footer (alongside spinner)
+    pub footer_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +230,32 @@ impl AppState {
             last_sidebar_click: None,
             last_raw_events_click: None,
             scroll_drag: None,
+            footer_spinner: None,
+            footer_message: None,
+        }
+    }
+
+    /// Start footer spinner with optional message
+    pub fn start_footer_spinner(&mut self, message: Option<String>) {
+        self.footer_spinner = Some(KnightRiderSpinner::new());
+        self.footer_message = message;
+    }
+
+    /// Stop footer spinner and clear message
+    pub fn stop_footer_spinner(&mut self) {
+        self.footer_spinner = None;
+        self.footer_message = None;
+    }
+
+    /// Update footer message (without affecting spinner state)
+    pub fn set_footer_message(&mut self, message: Option<String>) {
+        self.footer_message = message;
+    }
+
+    /// Tick footer spinner if active
+    pub fn tick_footer_spinner(&mut self) {
+        if let Some(spinner) = &mut self.footer_spinner {
+            spinner.tick();
         }
     }
 }

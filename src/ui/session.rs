@@ -4,6 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::agent::{AgentHandle, AgentType, SessionId, TokenUsage};
+use crate::git::PrManager;
 use crate::ui::components::{
     ChatView, EventDirection, InputBox, ProcessingState, RawEventsView, StatusBar,
     ThinkingIndicator, TurnSummary,
@@ -123,6 +124,19 @@ impl AgentSession {
             .set_session_id(self.agent_session_id.clone());
         self.status_bar.set_token_usage(self.total_usage.clone());
         self.status_bar.set_processing(self.is_processing);
+
+        // Update project info for right side of status bar
+        if let Some(working_dir) = &self.working_dir {
+            let repo_name = PrManager::get_repo_name(working_dir);
+            let branch_name = PrManager::get_current_branch(working_dir);
+            let folder_name = working_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from);
+            self.status_bar
+                .set_project_info(repo_name, branch_name, folder_name);
+        }
+
         let session_id = self
             .agent_session_id
             .as_ref()
