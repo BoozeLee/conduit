@@ -37,8 +37,10 @@ pub struct KnightRiderSpinner {
     trail_length: usize,
     /// Total frames in one complete cycle
     total_frames: usize,
-    /// Minimum alpha for fading (0.0 = invisible, 1.0 = full)
+    /// Minimum alpha for fading (0.3 = 30%, never goes below this)
     min_alpha: f64,
+    /// Inactive factor - brightness of inactive squares (0.6 = 60%)
+    inactive_factor: f64,
 }
 
 impl KnightRiderSpinner {
@@ -63,7 +65,8 @@ impl KnightRiderSpinner {
             hold_start_frames,
             trail_length,
             total_frames,
-            min_alpha: 0.0, // Can fade to nearly invisible
+            min_alpha: 0.3,       // Match opencode: never fade below 30%
+            inactive_factor: 0.6, // Match opencode: inactive at 60% brightness
         }
     }
 
@@ -193,18 +196,16 @@ impl KnightRiderSpinner {
                 -1 // Inactive
             };
 
-            // Get base color
-            let base_color = if color_index >= 0 && (color_index as usize) < self.trail_length {
+            // Get base color and apply appropriate dimming
+            let color = if color_index >= 0 && (color_index as usize) < self.trail_length {
+                // Active trail: use full trail colors
                 self.color_for_trail_index(color_index as usize)
             } else {
-                SPINNER_INACTIVE
-            };
-
-            // Apply fade to inactive squares
-            let color = if color_index < 0 || (color_index as usize) >= self.trail_length {
-                self.dim_color(base_color, fade)
-            } else {
-                base_color
+                // Inactive: apply inactive_factor as base, then fade on top
+                // opencode: defaultRgba.a = baseInactiveAlpha * fadeFactor
+                // Effective range: 0.6 * 0.3 = 0.18 to 0.6 * 1.0 = 0.6
+                let effective_brightness = self.inactive_factor * fade;
+                self.dim_color(SPINNER_INACTIVE, effective_brightness)
             };
 
             // Choose character based on whether it's part of the active trail
