@@ -139,6 +139,8 @@ pub struct SessionTab {
     pub pr_number: Option<i32>,
     /// When the tab was created
     pub created_at: DateTime<Utc>,
+    /// Pending user message that hasn't been confirmed by agent yet
+    pub pending_user_message: Option<String>,
 }
 
 impl SessionTab {
@@ -160,6 +162,7 @@ impl SessionTab {
             model,
             pr_number,
             created_at: Utc::now(),
+            pending_user_message: None,
         }
     }
 }

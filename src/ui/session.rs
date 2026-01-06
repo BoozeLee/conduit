@@ -54,6 +54,10 @@ pub struct AgentSession {
     pub pr_number: Option<u32>,
     /// Whether this tab has unread content (new messages arrived while not focused)
     pub needs_attention: bool,
+    /// PID of the running agent subprocess (for interrupt/kill)
+    pub agent_pid: Option<u32>,
+    /// Pending user message that hasn't been confirmed by agent yet
+    pub pending_user_message: Option<String>,
 }
 
 impl AgentSession {
@@ -80,6 +84,8 @@ impl AgentSession {
             turn_count: 0,
             pr_number: None,
             needs_attention: false,
+            agent_pid: None,
+            pending_user_message: None,
         }
     }
 

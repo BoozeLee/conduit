@@ -137,6 +137,22 @@ impl Database {
             conn.execute("ALTER TABLE session_tabs ADD COLUMN pr_number INTEGER", [])?;
         }
 
+        // Migration 3: Add pending_user_message column to session_tabs table
+        let has_pending_user_message: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('session_tabs') WHERE name='pending_user_message'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !has_pending_user_message {
+            conn.execute(
+                "ALTER TABLE session_tabs ADD COLUMN pending_user_message TEXT",
+                [],
+            )?;
+        }
+
         Ok(())
     }
 

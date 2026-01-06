@@ -39,8 +39,9 @@ use crate::ui::clipboard_paste::paste_image_to_temp_png;
 use crate::ui::components::{
     scrollbar_offset_from_point, AddRepoDialog, AgentSelector, BaseDirDialog, ChatMessage,
     ConfirmationContext, ConfirmationDialog, ConfirmationType, ErrorDialog, EventDirection,
-    GlobalFooter, HelpDialog, ModelSelector, ProcessingState, ProjectPicker, RawEventsClick,
-    RawEventsScrollbarMetrics, ScrollbarMetrics, SessionImportPicker, Sidebar, SidebarData, TabBar,
+    GlobalFooter, HelpDialog, MessageRole, ModelSelector, ProcessingState, ProjectPicker,
+    RawEventsClick, RawEventsScrollbarMetrics, ScrollbarMetrics, SessionImportPicker, Sidebar,
+    SidebarData, TabBar,
 };
 use crate::ui::effect::Effect;
 use crate::ui::events::{
@@ -230,6 +231,27 @@ impl App {
                 }
             }
 
+            // Restore pending user message if it exists and isn't already in history
+            if let Some(ref pending) = tab.pending_user_message {
+                // Check if last user message in chat matches pending
+                let already_in_history = session
+                    .chat_view
+                    .messages()
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == MessageRole::User)
+                    .map(|m| m.content.as_str() == pending.as_str())
+                    .unwrap_or(false);
+
+                if !already_in_history {
+                    let display = MessageDisplay::User {
+                        content: pending.clone(),
+                    };
+                    session.chat_view.push(display.to_chat_message());
+                    session.pending_user_message = Some(pending.clone());
+                }
+            }
+
             session.update_status();
 
             self.state.tab_manager.add_session(session);
@@ -313,7 +335,7 @@ impl App {
             .iter()
             .enumerate()
             .map(|(index, session)| {
-                SessionTab::new(
+                let mut tab = SessionTab::new(
                     index as i32,
                     session.agent_type,
                     session.workspace_id,
@@ -323,7 +345,10 @@ impl App {
                         .map(|s| s.as_str().to_string()),
                     session.model.clone(),
                     session.pr_number.map(|n| n as i32),
-                )
+                );
+                // Preserve pending user message for interrupted sessions
+                tab.pending_user_message = session.pending_user_message.clone();
+                tab
             })
             .collect();
 
@@ -629,6 +654,20 @@ impl App {
     fn interrupt_agent(&mut self) {
         if let Some(session) = self.state.tab_manager.active_session_mut() {
             if session.is_processing {
+                // Kill the subprocess if we have a PID
+                if let Some(pid) = session.agent_pid.take() {
+                    tracing::debug!("Sending SIGTERM to agent PID {}", pid);
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        // Windows: would need different approach
+                        tracing::warn!("Process termination not implemented on this platform");
+                    }
+                }
+
                 let display = MessageDisplay::System {
                     content: "Interrupted".to_string(),
                 };
@@ -1819,6 +1858,10 @@ impl App {
                     tokio::spawn(async move {
                         match runner.start(config).await {
                             Ok(mut handle) => {
+                                // Send PID to main app for interrupt support
+                                let pid = handle.pid;
+                                let _ = event_tx.send(AppEvent::AgentStarted { tab_index, pid });
+
                                 while let Some(event) = handle.events.recv().await {
                                     if event_tx.send(AppEvent::Agent { tab_index, event }).is_err()
                                     {
@@ -2442,6 +2485,26 @@ impl App {
                                 }
                             }
                         }
+                    }
+                }
+
+                // Restore pending user message if it exists and isn't already in history
+                if let Some(ref pending) = saved.pending_user_message {
+                    let already_in_history = session
+                        .chat_view
+                        .messages()
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == MessageRole::User)
+                        .map(|m| m.content.as_str() == pending.as_str())
+                        .unwrap_or(false);
+
+                    if !already_in_history {
+                        let display = MessageDisplay::User {
+                            content: pending.clone(),
+                        };
+                        session.chat_view.push(display.to_chat_message());
+                        session.pending_user_message = Some(pending.clone());
                     }
                 }
             }
@@ -3881,10 +3944,19 @@ impl App {
                     self.state.input_mode = InputMode::Normal;
                 }
             }
+            AppEvent::AgentStarted { tab_index, pid } => {
+                // Store the PID for interrupt support
+                if let Some(session) = self.state.tab_manager.session_mut(tab_index) {
+                    session.agent_pid = Some(pid);
+                    tracing::debug!("Agent started with PID {} for tab {}", pid, tab_index);
+                }
+            }
             AppEvent::AgentStreamEnded { tab_index } => {
                 // Agent event stream ended (process exited) - ensure processing is stopped
                 let was_processing =
                     if let Some(session) = self.state.tab_manager.session_mut(tab_index) {
+                        // Clear PID since process has exited
+                        session.agent_pid = None;
                         if session.is_processing {
                             session.stop_processing();
                             session.chat_view.finalize_streaming();
@@ -3960,6 +4032,8 @@ impl App {
             match event {
                 AgentEvent::SessionInit(init) => {
                     session.agent_session_id = Some(init.session_id);
+                    // Clear pending message - agent has confirmed receipt
+                    session.pending_user_message = None;
                     session.update_status();
                 }
                 AgentEvent::TurnStarted => {
@@ -4150,6 +4224,8 @@ impl App {
                 content: prompt.clone(),
             };
             session.chat_view.push(display.to_chat_message());
+            // Store pending message for persistence (cleared on agent confirmation)
+            session.pending_user_message = Some(prompt.clone());
             session.start_processing();
         }
         self.state.start_footer_spinner(None);
