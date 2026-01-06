@@ -9,8 +9,8 @@ use ratatui::{
 
 use crate::agent::{AgentType, ModelRegistry, SessionId, TokenUsage};
 use crate::ui::components::{
-    Spinner, ACCENT_ERROR, ACCENT_PRIMARY, ACCENT_SUCCESS, ACCENT_WARNING, STATUS_BAR_BG,
-    TEXT_BRIGHT, TEXT_FAINT, TEXT_MUTED,
+    ACCENT_ERROR, ACCENT_PRIMARY, ACCENT_SUCCESS, ACCENT_WARNING, STATUS_BAR_BG, TEXT_BRIGHT,
+    TEXT_FAINT, TEXT_MUTED,
 };
 
 /// Status bar component showing session info
@@ -20,8 +20,6 @@ pub struct StatusBar {
     session_id: Option<SessionId>,
     token_usage: TokenUsage,
     estimated_cost: f64,
-    is_processing: bool,
-    spinner: Spinner,
     /// Whether to show performance metrics
     show_metrics: bool,
     /// Repository name (from git remote or directory)
@@ -56,8 +54,6 @@ impl StatusBar {
             session_id: None,
             token_usage: TokenUsage::default(),
             estimated_cost: 0.0,
-            is_processing: false,
-            spinner: Spinner::dots(),
             show_metrics: false,
             repo_name: None,
             branch_name: None,
@@ -70,13 +66,6 @@ impl StatusBar {
             scroll_lines_per_sec: 0.0,
             scroll_events_per_sec: 0.0,
             scroll_active: false,
-        }
-    }
-
-    /// Advance spinner animation
-    pub fn tick(&mut self) {
-        if self.is_processing {
-            self.spinner.tick();
         }
     }
 
@@ -95,10 +84,6 @@ impl StatusBar {
     pub fn set_token_usage(&mut self, usage: TokenUsage) {
         self.token_usage = usage;
         self.update_cost();
-    }
-
-    pub fn set_processing(&mut self, processing: bool) {
-        self.is_processing = processing;
     }
 
     /// Set project info for right side of status bar
@@ -182,11 +167,7 @@ impl StatusBar {
             Style::default().fg(TEXT_MUTED),
         ));
 
-        // Processing indicator with spinner (compact)
-        if self.is_processing {
-            spans.push(Span::raw(" "));
-            spans.push(self.spinner.span(ACCENT_WARNING));
-        }
+        // Note: Old processing spinner removed - now using Knight Rider spinner in footer
 
         // Performance metrics (when enabled)
         if self.show_metrics {
