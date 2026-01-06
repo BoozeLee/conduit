@@ -68,18 +68,18 @@ impl PrManager {
 
         // Try HTTPS format: https://github.com/user/repo
         if let Some(path) = url.strip_prefix("https://") {
-            return path.split('/').last().map(String::from);
+            return path.split('/').next_back().map(String::from);
         }
 
         // Try SSH format: git@github.com:user/repo
         if url.starts_with("git@") {
             if let Some(path) = url.split(':').nth(1) {
-                return path.split('/').last().map(String::from);
+                return path.split('/').next_back().map(String::from);
             }
         }
 
         // Fallback: just take the last path component
-        url.split('/').last().map(String::from)
+        url.split('/').next_back().map(String::from)
     }
 
     /// Check if GitHub CLI (gh) is installed
