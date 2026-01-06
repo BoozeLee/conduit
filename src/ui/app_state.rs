@@ -183,6 +183,10 @@ pub struct AppState {
     pub footer_spinner: Option<KnightRiderSpinner>,
     /// Message to display in footer (alongside spinner)
     pub footer_message: Option<String>,
+    /// Last Ctrl+C press time for double-press detection
+    pub last_ctrl_c_press: Option<Instant>,
+    /// Last Esc press time for double-press detection
+    pub last_esc_press: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,6 +236,8 @@ impl AppState {
             scroll_drag: None,
             footer_spinner: None,
             footer_message: None,
+            last_ctrl_c_press: None,
+            last_esc_press: None,
         }
     }
 

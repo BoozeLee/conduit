@@ -49,6 +49,9 @@ use crate::ui::events::{
 use crate::ui::session::AgentSession;
 use crate::ui::terminal_guard::TerminalGuard;
 
+/// Timeout for double-press detection (ms)
+const DOUBLE_PRESS_TIMEOUT_MS: u64 = 500;
+
 /// Main application state
 pub struct App {
     /// Application configuration
@@ -573,6 +576,36 @@ impl App {
             self.state.tick_footer_spinner();
         }
 
+        // Clear stale double-press state and messages
+        let now = Instant::now();
+        let timeout = Duration::from_millis(DOUBLE_PRESS_TIMEOUT_MS);
+
+        if let Some(last) = self.state.last_ctrl_c_press {
+            if now.duration_since(last) > timeout {
+                self.state.last_ctrl_c_press = None;
+                // Clear associated message
+                if matches!(
+                    self.state.footer_message.as_deref(),
+                    Some("Press Ctrl+C again to interrupt and quit")
+                        | Some("Press Ctrl+C again to quit")
+                ) {
+                    self.state.footer_message = None;
+                }
+            }
+        }
+
+        if let Some(last) = self.state.last_esc_press {
+            if now.duration_since(last) > timeout {
+                self.state.last_esc_press = None;
+                if matches!(
+                    self.state.footer_message.as_deref(),
+                    Some("Press Esc again to interrupt") | Some("Press Esc again to clear")
+                ) {
+                    self.state.footer_message = None;
+                }
+            }
+        }
+
         // Tick other animations every 6 frames (~100ms)
         if !self.state.tick_count.is_multiple_of(6) {
             return;
@@ -592,10 +625,150 @@ impl App {
         }
     }
 
+    /// Interrupt the current agent processing
+    fn interrupt_agent(&mut self) {
+        if let Some(session) = self.state.tab_manager.active_session_mut() {
+            if session.is_processing {
+                let display = MessageDisplay::System {
+                    content: "Interrupted".to_string(),
+                };
+                session.chat_view.push(display.to_chat_message());
+                session.stop_processing();
+                self.state.stop_footer_spinner();
+            }
+        }
+    }
+
+    /// Handle Ctrl+C press with double-press detection
+    fn handle_ctrl_c_press(&mut self) -> bool {
+        let now = Instant::now();
+        let is_double = self
+            .state
+            .last_ctrl_c_press
+            .map(|t| now.duration_since(t) < Duration::from_millis(DOUBLE_PRESS_TIMEOUT_MS))
+            .unwrap_or(false);
+
+        let is_processing = self
+            .state
+            .tab_manager
+            .active_session()
+            .map(|s| s.is_processing)
+            .unwrap_or(false);
+
+        tracing::debug!(
+            "handle_ctrl_c_press: is_double={}, is_processing={}",
+            is_double,
+            is_processing
+        );
+
+        if is_processing {
+            if is_double {
+                // Second press while processing: interrupt + quit
+                tracing::debug!("Ctrl+C: second press while processing, interrupting and quitting");
+                self.interrupt_agent();
+                self.state.should_quit = true;
+            } else {
+                // First press: show warning
+                tracing::debug!("Ctrl+C: first press while processing, showing warning");
+                self.state.footer_message = Some("Press Ctrl+C again to interrupt and quit".into());
+                self.state.last_ctrl_c_press = Some(now);
+            }
+        } else if is_double {
+            // Second press while idle: quit
+            tracing::debug!("Ctrl+C: second press while idle, quitting");
+            self.state.should_quit = true;
+        } else {
+            // First press while idle: clear input + show warning
+            tracing::debug!("Ctrl+C: first press while idle, clearing input and showing warning");
+            if let Some(session) = self.state.tab_manager.active_session_mut() {
+                session.input_box.clear();
+            }
+            self.state.footer_message = Some("Press Ctrl+C again to quit".into());
+            self.state.last_ctrl_c_press = Some(now);
+        }
+        tracing::debug!("footer_message after: {:?}", self.state.footer_message);
+        true
+    }
+
+    /// Handle Esc press with double-press detection (only when no dialog is active)
+    fn handle_esc_press(&mut self) -> bool {
+        let now = Instant::now();
+        let is_double = self
+            .state
+            .last_esc_press
+            .map(|t| now.duration_since(t) < Duration::from_millis(DOUBLE_PRESS_TIMEOUT_MS))
+            .unwrap_or(false);
+
+        let is_processing = self
+            .state
+            .tab_manager
+            .active_session()
+            .map(|s| s.is_processing)
+            .unwrap_or(false);
+
+        if is_processing {
+            if is_double {
+                // Second press while processing: interrupt only
+                self.interrupt_agent();
+                self.state.footer_message = None;
+                self.state.last_esc_press = None;
+            } else {
+                // First press: show warning
+                self.state.footer_message = Some("Press Esc again to interrupt".into());
+                self.state.last_esc_press = Some(now);
+            }
+        } else if is_double {
+            // Second press while idle: clear input
+            if let Some(session) = self.state.tab_manager.active_session_mut() {
+                session.input_box.clear();
+            }
+            self.state.footer_message = None;
+            self.state.last_esc_press = None;
+        } else {
+            // First press while idle: show warning
+            self.state.footer_message = Some("Press Esc again to clear".into());
+            self.state.last_esc_press = Some(now);
+        }
+        true
+    }
+
+    /// Check if any dialog is currently active
+    fn has_active_dialog(&self) -> bool {
+        self.state.base_dir_dialog_state.is_visible()
+            || self.state.project_picker_state.is_visible()
+            || self.state.add_repo_dialog_state.is_visible()
+            || self.state.model_selector_state.is_visible()
+            || self.state.agent_selector_state.is_visible()
+            || self.state.confirmation_dialog_state.visible
+            || self.state.error_dialog_state.is_visible()
+            || self.state.help_dialog_state.is_visible()
+            || self.state.session_import_state.is_visible()
+    }
+
     async fn handle_key_event(&mut self, key: event::KeyEvent) -> anyhow::Result<Vec<Effect>> {
         // Special handling for modes that bypass normal key processing
         if self.state.input_mode == InputMode::RemovingProject {
             // Ignore all input while removing project
+            return Ok(Vec::new());
+        }
+
+        // Handle Ctrl+C with double-press detection (global)
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            tracing::debug!("Ctrl+C detected, calling handle_ctrl_c_press");
+            self.handle_ctrl_c_press();
+            return Ok(Vec::new());
+        }
+
+        // Handle Esc with double-press detection (only when no dialog active and in normal mode)
+        if key.code == KeyCode::Esc
+            && !self.has_active_dialog()
+            && !self.state.show_first_time_splash
+            && matches!(
+                self.state.input_mode,
+                InputMode::Normal | InputMode::Scrolling
+            )
+        {
+            self.handle_esc_press();
             return Ok(Vec::new());
         }
 
@@ -777,16 +950,7 @@ impl App {
                 }
             }
             Action::InterruptAgent => {
-                if let Some(session) = self.state.tab_manager.active_session_mut() {
-                    if session.is_processing {
-                        let display = MessageDisplay::System {
-                            content: "Interrupted".to_string(),
-                        };
-                        session.chat_view.push(display.to_chat_message());
-                        session.stop_processing();
-                        self.state.stop_footer_spinner();
-                    }
-                }
+                self.interrupt_agent();
             }
             Action::ToggleViewMode => {
                 self.state.view_mode = match self.state.view_mode {
