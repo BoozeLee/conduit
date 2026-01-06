@@ -5,6 +5,10 @@ edition = "2021"
 description = "Multi-agent TUI for Claude Code and Codex CLI"
 authors = ["Felipe Coury"]
 license = "MIT"
+repository = "https://github.com/fcoury/conduit"
+readme = "README.md"
+keywords = ["tui", "cli", "claude", "ai", "terminal"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 # Async runtime

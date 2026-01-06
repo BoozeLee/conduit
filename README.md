@@ -33,48 +33,75 @@ The binary will be available at `target/release/conduit`.
 ## Usage
 
 ```bash
-# Start with default agent (Claude Code)
+# Start the TUI
 conduit
 
-# Start in a specific directory
-conduit /path/to/project
+# Debug keyboard input (useful for troubleshooting keybindings)
+conduit debug-keys
 ```
 
 ### Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+N` | New tab (opens agent selector) |
-| `Ctrl+W` | Close current tab |
-| `Tab` | Switch to next tab |
-| `Ctrl+1-9` | Jump to specific tab |
+| `Ctrl+N` | New project (opens project picker) |
+| `Alt+Shift+W` | Close current tab |
+| `Tab` / `Shift+Tab` | Switch to next/previous tab |
+| `Alt+1-9` | Jump to specific tab |
 | `Enter` | Submit prompt |
-| `Shift+Enter` | Add newline in input |
-| `Up/Down` | Navigate command history |
+| `Shift+Enter` or `Alt+Enter` | Add newline in input |
 | `Ctrl+C` | Interrupt agent |
 | `Ctrl+Q` | Quit |
+| `Ctrl+T` | Toggle sidebar |
+| `Ctrl+G` | Toggle view mode (Chat/Raw Events) |
+| `Ctrl+O` | Show model selector |
+| `Alt+I` | Import session |
+| `?` or `:help` | Show help |
 
 ## Architecture
 
 ```
 src/
 ├── main.rs              # Entry point
+├── lib.rs               # Library exports
 ├── agent/               # Agent integration layer
 │   ├── runner.rs        # AgentRunner trait
 │   ├── events.rs        # Unified event types
 │   ├── stream.rs        # JSONL stream parser
 │   ├── claude.rs        # Claude Code implementation
-│   └── codex.rs         # Codex CLI implementation
+│   ├── codex.rs         # Codex CLI implementation
+│   ├── models.rs        # Model registry and pricing
+│   ├── session.rs       # Session metadata
+│   └── history.rs       # History loading utilities
 ├── config/              # Configuration
-│   └── settings.rs      # App settings and pricing
+│   ├── settings.rs      # App settings and pricing
+│   ├── keys.rs          # Keybinding types and parsing
+│   └── default_keys.rs  # Default keybindings
+├── data/                # Data persistence
+│   ├── database.rs      # SQLite database
+│   ├── repository.rs    # Data access layer
+│   └── workspace.rs     # Workspace management
+├── session/             # Session management
+│   ├── cache.rs         # Session caching
+│   └── import.rs        # Session import from agents
+├── git/                 # Git integration
+│   ├── pr.rs            # PR operations
+│   └── worktree.rs      # Worktree utilities
+├── util/                # Utilities
+│   ├── paths.rs         # Path helpers
+│   └── names.rs         # Name generation
 └── ui/                  # Terminal UI
     ├── app.rs           # Main event loop
+    ├── action.rs        # Action definitions
+    ├── events.rs        # Input mode handling
     ├── tab_manager.rs   # Tab orchestration
     ├── session.rs       # Per-tab state
     └── components/      # UI components
         ├── chat_view.rs
         ├── input_box.rs
+        ├── sidebar.rs
         ├── status_bar.rs
+        ├── tab_bar.rs
         └── ...
 ```
 
