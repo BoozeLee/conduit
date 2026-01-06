@@ -28,7 +28,7 @@ pub fn default_keybindings() -> KeybindingConfig {
     bind(&mut config.global, "C-t", Action::ToggleSidebar);
     bind(&mut config.global, "C-n", Action::NewProject);
     bind(&mut config.global, "C-p", Action::OpenPr);
-    bind(&mut config.global, "C-c", Action::InterruptAgent);
+    // Note: Ctrl+C is handled specially in app.rs for double-press detection
     bind(&mut config.global, "C-g", Action::ToggleViewMode);
     bind(&mut config.global, "C-o", Action::ShowModelSelector);
     bind(&mut config.global, "M-i", Action::OpenSessionImport);
