@@ -968,17 +968,8 @@ impl App {
         // Convert key event to KeyCombo for lookup
         let key_combo = KeyCombo::from_key_event(&key);
 
-        // Debug logging for key events (helps diagnose Kitty protocol issues)
-        tracing::debug!(
-            "Key event: {:?} modifiers={:?} -> KeyCombo: {}",
-            key.code,
-            key.modifiers,
-            key_combo
-        );
-
         // Look up action in config (context-specific first, then global)
         if let Some(action) = self.config.keybindings.get_action(&key_combo, context) {
-            tracing::debug!("Matched action: {:?}", action);
             return self.execute_action(action.clone()).await;
         }
 
