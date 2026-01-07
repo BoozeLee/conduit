@@ -88,7 +88,9 @@ impl CodexCliRunner {
             }
         } else {
             // New session: exec [flags] -- <prompt>
-            cmd.arg("--").arg(&config.prompt);
+            if !config.prompt.is_empty() {
+                cmd.arg("--").arg(&config.prompt);
+            }
         }
 
         // Working directory
