@@ -185,6 +185,8 @@ pub struct AppState {
     pub footer_spinner: Option<KnightRiderSpinner>,
     /// Message to display in footer (alongside spinner)
     pub footer_message: Option<String>,
+    /// When the footer message should auto-expire (if timed)
+    pub footer_message_expires_at: Option<Instant>,
     /// Last Ctrl+C press time for double-press detection
     pub last_ctrl_c_press: Option<Instant>,
     /// Last Esc press time for double-press detection
@@ -243,6 +245,7 @@ impl AppState {
             scroll_drag: None,
             footer_spinner: None,
             footer_message: None,
+            footer_message_expires_at: None,
             last_ctrl_c_press: None,
             last_esc_press: None,
             logo_shine: LogoShineAnimation::new(),
@@ -280,17 +283,36 @@ impl AppState {
     pub fn start_footer_spinner(&mut self, message: Option<String>) {
         self.footer_spinner = Some(KnightRiderSpinner::new());
         self.footer_message = message;
+        self.footer_message_expires_at = None;
     }
 
     /// Stop footer spinner and clear message
     pub fn stop_footer_spinner(&mut self) {
         self.footer_spinner = None;
         self.footer_message = None;
+        self.footer_message_expires_at = None;
     }
 
     /// Update footer message (without affecting spinner state)
     pub fn set_footer_message(&mut self, message: Option<String>) {
         self.footer_message = message;
+        self.footer_message_expires_at = None;
+    }
+
+    /// Set a footer message that auto-expires after the given duration
+    pub fn set_timed_footer_message(&mut self, message: String, duration: Duration) {
+        self.footer_message = Some(message);
+        self.footer_message_expires_at = Some(Instant::now() + duration);
+    }
+
+    /// Check and clear expired footer message
+    pub fn clear_expired_footer_message(&mut self) {
+        if let Some(expires_at) = self.footer_message_expires_at {
+            if Instant::now() >= expires_at {
+                self.footer_message = None;
+                self.footer_message_expires_at = None;
+            }
+        }
     }
 
     /// Tick footer spinner if active

@@ -757,6 +757,9 @@ impl App {
             }
         }
 
+        // Clear expired timed footer messages
+        self.state.clear_expired_footer_message();
+
         // Tick other animations every 6 frames (~100ms)
         if !self.state.tick_count.is_multiple_of(6) {
             return;
@@ -1186,8 +1189,10 @@ impl App {
                     if let Some(working_dir) = &session.working_dir {
                         let path_str = working_dir.display().to_string();
                         effects.push(Effect::CopyToClipboard(path_str.clone()));
-                        self.state
-                            .set_footer_message(Some(format!("Copied: {}", path_str)));
+                        self.state.set_timed_footer_message(
+                            format!("Copied: {}", path_str),
+                            Duration::from_secs(10),
+                        );
                     }
                 }
             }
