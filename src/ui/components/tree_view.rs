@@ -541,6 +541,13 @@ impl SidebarData {
         repo_name: &str,
         workspaces: Vec<(Uuid, String, String)>, // (id, name, branch)
     ) {
+        tracing::debug!(
+            repo_id = %repo_id,
+            repo_name = repo_name,
+            workspace_count = workspaces.len(),
+            "Adding repository to sidebar"
+        );
+
         let mut repo_node = TreeNode::parent(repo_id, repo_name);
 
         // Add action node as first child
@@ -548,8 +555,15 @@ impl SidebarData {
         repo_node = repo_node.with_child(action_node);
 
         // Add workspace nodes
-        for (ws_id, ws_name, branch) in workspaces {
-            let ws_node = TreeNode::leaf(ws_id, ws_name, branch);
+        for (ws_id, ws_name, branch) in &workspaces {
+            tracing::debug!(
+                workspace_id = %ws_id,
+                workspace_name = ws_name,
+                branch = branch,
+                has_branch = !branch.is_empty(),
+                "Adding workspace to sidebar"
+            );
+            let ws_node = TreeNode::leaf(*ws_id, ws_name.clone(), branch.clone());
             repo_node = repo_node.with_child(ws_node);
         }
 
@@ -682,27 +696,68 @@ impl SidebarData {
 
     /// Update git stats for a workspace by its ID
     pub fn update_workspace_git_stats(&mut self, workspace_id: Uuid, stats: GitDiffStats) {
+        tracing::debug!(
+            workspace_id = %workspace_id,
+            additions = stats.additions,
+            deletions = stats.deletions,
+            "Attempting to update workspace git stats"
+        );
+
         for node in &mut self.nodes {
             if node.node_type == NodeType::Repository {
+                tracing::debug!(
+                    repo_id = %node.id,
+                    repo_name = %node.label,
+                    child_count = node.children.len(),
+                    "Searching repository for workspace"
+                );
                 for child in &mut node.children {
+                    tracing::debug!(
+                        child_id = %child.id,
+                        child_name = %child.label,
+                        child_type = ?child.node_type,
+                        target_workspace_id = %workspace_id,
+                        "Checking child node"
+                    );
                     if child.id == workspace_id && child.node_type == NodeType::Workspace {
                         child.git_stats = Some(stats);
+                        tracing::info!(
+                            workspace_id = %workspace_id,
+                            "Successfully updated git stats for workspace"
+                        );
                         return;
                     }
                 }
             }
         }
+        tracing::warn!(
+            workspace_id = %workspace_id,
+            "Workspace not found in sidebar - git stats update failed"
+        );
     }
 
     /// Update branch name for a workspace by its ID
     ///
     /// Pass `None` to clear the branch (e.g., for detached HEAD state)
     pub fn update_workspace_branch(&mut self, workspace_id: Uuid, branch: Option<String>) {
+        tracing::debug!(
+            workspace_id = %workspace_id,
+            branch = ?branch,
+            "Attempting to update workspace branch"
+        );
+
         for node in &mut self.nodes {
             if node.node_type == NodeType::Repository {
                 for child in &mut node.children {
                     if child.id == workspace_id && child.node_type == NodeType::Workspace {
-                        child.suffix = branch;
+                        let old_suffix = child.suffix.clone();
+                        child.suffix = branch.clone();
+                        tracing::info!(
+                            workspace_id = %workspace_id,
+                            old_branch = ?old_suffix,
+                            new_branch = ?branch,
+                            "Updated workspace branch in sidebar"
+                        );
                         return;
                     }
                 }
