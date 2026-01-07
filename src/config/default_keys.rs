@@ -73,6 +73,9 @@ pub fn default_keybindings() -> KeybindingConfig {
     bind(&mut config.global, "M-S-f", Action::ScrollPageDown);
     bind(&mut config.global, "M-S-b", Action::ScrollPageUp);
 
+    // Copy workspace path to clipboard
+    bind(&mut config.global, "M-S-c", Action::CopyWorkspacePath);
+
     // Ctrl+Arrow for scrolling
     config.global.insert(
         KeyCombo::new(KeyCode::Up, KeyModifiers::CONTROL),

@@ -1181,6 +1181,16 @@ impl App {
             Action::DumpDebugState => {
                 effects.push(Effect::DumpDebugState);
             }
+            Action::CopyWorkspacePath => {
+                if let Some(session) = self.state.tab_manager.active_session() {
+                    if let Some(working_dir) = &session.working_dir {
+                        let path_str = working_dir.display().to_string();
+                        effects.push(Effect::CopyToClipboard(path_str.clone()));
+                        self.state
+                            .set_footer_message(Some(format!("Copied: {}", path_str)));
+                    }
+                }
+            }
 
             // ========== Tab Management ==========
             Action::CloseTab => {

@@ -28,6 +28,8 @@ pub enum Action {
     ToggleMetrics,
     /// Dump debug state to file
     DumpDebugState,
+    /// Copy current workspace path to clipboard
+    CopyWorkspacePath,
 
     // ========== Tab Management ==========
     /// Close current tab
@@ -200,6 +202,7 @@ impl Action {
             Action::ShowModelSelector => "Select model",
             Action::ToggleMetrics => "Toggle metrics",
             Action::DumpDebugState => "Dump debug state",
+            Action::CopyWorkspacePath => "Copy workspace path",
 
             // Tab management
             Action::CloseTab => "Close tab",
@@ -321,6 +324,7 @@ impl Action {
                 | Action::ShowModelSelector
                 | Action::ToggleMetrics
                 | Action::DumpDebugState
+                | Action::CopyWorkspacePath
                 // Tab management
                 | Action::CloseTab
                 | Action::NextTab
