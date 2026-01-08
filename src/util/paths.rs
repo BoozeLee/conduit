@@ -1,12 +1,31 @@
 //! Path utilities for Conduit data directories
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
-/// Get the base Conduit data directory (~/.conduit)
-pub fn data_dir() -> PathBuf {
+/// Global storage for custom data directory path
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Initialize the data directory with an optional custom path.
+/// Must be called early in main() before any other path functions are used.
+/// If custom_path is None, uses the default ~/.conduit location.
+pub fn init_data_dir(custom_path: Option<PathBuf>) {
+    let path = custom_path.unwrap_or_else(default_data_dir);
+    // Ignore error if already set (shouldn't happen in normal usage)
+    let _ = DATA_DIR.set(path);
+}
+
+/// Get the default data directory path (~/.conduit)
+fn default_data_dir() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".conduit"))
         .unwrap_or_else(|| PathBuf::from(".conduit"))
+}
+
+/// Get the base Conduit data directory.
+/// Returns the custom path if set via init_data_dir(), otherwise ~/.conduit
+pub fn data_dir() -> PathBuf {
+    DATA_DIR.get().cloned().unwrap_or_else(default_data_dir)
 }
 
 /// Get the database file path (~/.conduit/conduit.db)

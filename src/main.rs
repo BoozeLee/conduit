@@ -2,11 +2,16 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use conduit::{ui::terminal_guard, util, App, Config};
 use std::fs::{self, OpenOptions};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "conduit")]
 #[command(about = "Multi-agent TUI for Claude Code and Codex CLI")]
 struct Cli {
+    /// Custom data directory (default: ~/.conduit)
+    #[arg(long, value_name = "PATH")]
+    data_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -20,6 +25,9 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Initialize data directory FIRST before any other setup
+    util::init_data_dir(cli.data_dir);
 
     match cli.command {
         Some(Commands::DebugKeys) => {

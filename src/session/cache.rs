@@ -32,10 +32,7 @@ pub struct SessionCache {
 impl SessionCache {
     /// Get the cache file path
     pub fn cache_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".conduit")
-            .join("sessions_cache.json")
+        crate::util::data_dir().join("sessions_cache.json")
     }
 
     /// Load cache from disk, returning empty cache if missing/corrupt
