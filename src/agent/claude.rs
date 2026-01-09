@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 
 use crate::agent::error::AgentError;
 use crate::agent::events::{
-    AgentEvent, AssistantMessageEvent, SessionInitEvent, TokenUsage, ToolCompletedEvent,
-    ToolStartedEvent, TurnCompletedEvent,
+    AgentEvent, AssistantMessageEvent, ErrorEvent, SessionInitEvent, TokenUsage,
+    ToolCompletedEvent, ToolStartedEvent, TurnCompletedEvent,
 };
 use crate::agent::runner::{AgentHandle, AgentRunner, AgentStartConfig, AgentType};
 use crate::agent::session::SessionId;
@@ -216,16 +216,26 @@ impl AgentRunner for ClaudeCodeRunner {
 
         let pid = child.id().ok_or(AgentError::ProcessSpawnFailed)?;
         let stdout = child.stdout.take().ok_or(AgentError::StdoutCaptureFailed)?;
+        let stderr = child.stderr.take();
 
         let (tx, rx) = mpsc::channel::<AgentEvent>(256);
+        let tx_for_monitor = tx.clone();
 
         // Spawn JSONL parser task
         tokio::spawn(async move {
             let (raw_tx, mut raw_rx) = mpsc::channel::<ClaudeRawEvent>(256);
+            let tx_for_parser = tx.clone();
 
             // Parse raw events
             let parse_handle = tokio::spawn(async move {
-                let _ = JsonlStreamParser::parse_stream(stdout, raw_tx).await;
+                if let Err(e) = JsonlStreamParser::parse_stream(stdout, raw_tx).await {
+                    let _ = tx_for_parser
+                        .send(AgentEvent::Error(ErrorEvent {
+                            message: format!("Stream parsing error: {}", e),
+                            is_fatal: true,
+                        }))
+                        .await;
+                }
             });
 
             // Convert and forward events
@@ -240,9 +250,50 @@ impl AgentRunner for ClaudeCodeRunner {
             let _ = parse_handle.await;
         });
 
-        // Monitor process exit
+        // Monitor process exit and capture stderr
         tokio::spawn(async move {
-            let _ = child.wait().await;
+            use tokio::io::AsyncReadExt;
+
+            let status = child.wait().await;
+
+            // Read stderr if available
+            let stderr_content = if let Some(mut stderr) = stderr {
+                let mut buf = String::new();
+                let _ = stderr.read_to_string(&mut buf).await;
+                buf
+            } else {
+                String::new()
+            };
+
+            // Check if process failed
+            match status {
+                Ok(exit_status) if !exit_status.success() => {
+                    let error_msg = if stderr_content.is_empty() {
+                        format!("Claude process exited with status: {}", exit_status)
+                    } else {
+                        format!(
+                            "Claude process failed ({}): {}",
+                            exit_status,
+                            stderr_content.trim()
+                        )
+                    };
+                    let _ = tx_for_monitor
+                        .send(AgentEvent::Error(ErrorEvent {
+                            message: error_msg,
+                            is_fatal: true,
+                        }))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx_for_monitor
+                        .send(AgentEvent::Error(ErrorEvent {
+                            message: format!("Failed to wait for Claude process: {}", e),
+                            is_fatal: true,
+                        }))
+                        .await;
+                }
+                Ok(_) => {}
+            }
         });
 
         Ok(AgentHandle::new(rx, pid))
