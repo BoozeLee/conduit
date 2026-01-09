@@ -25,6 +25,11 @@ impl ClaudeCodeRunner {
         }
     }
 
+    /// Create a runner with a specific binary path
+    pub fn with_path(path: PathBuf) -> Self {
+        Self { binary_path: path }
+    }
+
     fn find_binary() -> Option<PathBuf> {
         which::which("claude").ok()
     }

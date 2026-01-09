@@ -1,6 +1,11 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use conduit::{ui::terminal_guard, util, App, Config};
+use conduit::{
+    config::save_tool_path,
+    ui::terminal_guard,
+    util::{self, Tool, ToolAvailability},
+    App, Config,
+};
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 
@@ -66,9 +71,159 @@ async fn run_app() -> Result<()> {
     // Create config (loads from ~/.conduit/config.toml if present)
     let config = Config::load();
 
-    // Create and run app
-    let mut app = App::new(config);
+    // Detect tool availability
+    let mut tools = ToolAvailability::detect(&config.tool_paths);
+
+    // Check MANDATORY requirement: git
+    // Conduit exists for git worktree management, cannot function without git
+    if !tools.is_available(Tool::Git) {
+        match run_blocking_tool_dialog(Tool::Git, &tools)? {
+            Some(path) => {
+                tools.update_tool(Tool::Git, path.clone());
+                if let Err(e) = save_tool_path(Tool::Git, &path) {
+                    eprintln!("Warning: Failed to save git path to config: {}", e);
+                }
+            }
+            None => {
+                // User chose to quit
+                return Ok(());
+            }
+        }
+    }
+
+    // Check critical requirement: at least one agent
+    if !tools.has_any_agent() {
+        // Prefer Claude, but accept either
+        let preferred_agent = Tool::Claude;
+        match run_blocking_tool_dialog(preferred_agent, &tools)? {
+            Some(path) => {
+                // Determine which agent based on path name
+                let tool = if path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().contains("codex"))
+                    .unwrap_or(false)
+                {
+                    Tool::Codex
+                } else {
+                    Tool::Claude
+                };
+                tools.update_tool(tool, path.clone());
+                if let Err(e) = save_tool_path(tool, &path) {
+                    eprintln!("Warning: Failed to save agent path to config: {}", e);
+                }
+            }
+            None => {
+                // User chose to quit
+                return Ok(());
+            }
+        }
+    }
+
+    // Create and run app with tool availability
+    let mut app = App::new(config, tools);
     app.run().await
+}
+
+/// Run a blocking dialog to get a tool path from the user
+///
+/// This creates a minimal TUI just for the dialog, then returns control.
+/// Returns Some(path) if user provided a valid path, None if user chose to quit.
+fn run_blocking_tool_dialog(tool: Tool, _tools: &ToolAvailability) -> Result<Option<PathBuf>> {
+    use conduit::ui::components::{MissingToolDialog, MissingToolDialogState, MissingToolResult};
+    use crossterm::{
+        event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    };
+    use ratatui::{backend::CrosstermBackend, Terminal};
+    use std::io::stdout;
+
+    // Set up terminal
+    enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Create dialog state
+    let mut state = MissingToolDialogState::default();
+    state.show(tool);
+
+    let result = loop {
+        // Draw
+        terminal.draw(|f| {
+            let dialog = MissingToolDialog::new(&state);
+            f.render_widget(dialog, f.area());
+        })?;
+
+        // Handle events
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(KeyEvent {
+                code,
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            }) = event::read()?
+            {
+                match (code, modifiers) {
+                    // Quit
+                    (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
+                        break None;
+                    }
+                    // Validate and submit
+                    (KeyCode::Enter, _) => {
+                        if let Some(result) = state.validate() {
+                            match result {
+                                MissingToolResult::PathProvided(path) => {
+                                    break Some(path);
+                                }
+                                MissingToolResult::Quit => {
+                                    break None;
+                                }
+                                MissingToolResult::Skipped => {
+                                    // This shouldn't happen for required tools
+                                    break None;
+                                }
+                            }
+                        }
+                        // If validation failed, error is set in state and we continue
+                    }
+                    // Text input
+                    (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                        state.insert_char(c);
+                    }
+                    (KeyCode::Backspace, _) => {
+                        state.backspace();
+                    }
+                    (KeyCode::Delete, _) => {
+                        state.delete();
+                    }
+                    (KeyCode::Left, _) => {
+                        state.move_left();
+                    }
+                    (KeyCode::Right, _) => {
+                        state.move_right();
+                    }
+                    (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                        state.move_to_start();
+                    }
+                    (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                        state.move_to_end();
+                    }
+                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                        state.clear_input();
+                    }
+                    _ => {}
+                }
+            }
+        }
+    };
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+    Ok(result)
 }
 
 /// Run the keyboard debug mode

@@ -14,6 +14,7 @@ mod key_hints;
 mod knight_rider_spinner;
 mod logo_shine;
 mod markdown;
+mod missing_tool_dialog;
 mod model_selector;
 mod path_input;
 mod project_picker;
@@ -50,6 +51,9 @@ pub use key_hints::{render_key_hints, render_key_hints_responsive, KeyHintBarSty
 pub use knight_rider_spinner::KnightRiderSpinner;
 pub use logo_shine::LogoShineAnimation;
 pub use markdown::MarkdownRenderer;
+pub use missing_tool_dialog::{
+    MissingToolDialog, MissingToolDialogState, MissingToolResult, StartupToolDialog,
+};
 pub use model_selector::{ModelSelector, ModelSelectorItem, ModelSelectorState};
 pub use path_input::PathInputState;
 pub use project_picker::{ProjectEntry, ProjectPicker, ProjectPickerState};

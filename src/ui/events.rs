@@ -158,6 +158,8 @@ pub enum InputMode {
     ImportingSession,
     /// Command palette is open
     CommandPalette,
+    /// Missing tool dialog is open
+    MissingTool,
 }
 
 /// View mode for the main content area

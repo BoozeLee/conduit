@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use toml_edit::{DocumentMut, Item, Table};
 
 use crate::agent::AgentType;
 use crate::ui::action::Action;
 use crate::util::paths::config_path;
+use crate::util::tools::{Tool, ToolPaths};
 
 use super::default_keys::default_keybindings;
 use super::keys::{parse_key_notation, KeyContext, KeybindingConfig};
@@ -35,6 +37,8 @@ pub struct Config {
     pub claude_output_cost_per_million: f64,
     /// Keybinding configuration
     pub keybindings: KeybindingConfig,
+    /// Configured paths for external tools (git, gh, claude, codex)
+    pub tool_paths: ToolPaths,
 }
 
 impl Default for Config {
@@ -57,6 +61,7 @@ impl Default for Config {
             claude_input_cost_per_million: 3.0,
             claude_output_cost_per_million: 15.0,
             keybindings: default_keybindings(),
+            tool_paths: ToolPaths::default(),
         }
     }
 }
@@ -101,6 +106,8 @@ pub struct TomlKeybindings {
 pub struct TomlConfig {
     /// Keybinding configuration
     pub keys: Option<TomlKeybindings>,
+    /// Tool path configuration
+    pub tools: Option<ToolPaths>,
 }
 
 impl TomlKeybindings {
@@ -384,6 +391,11 @@ impl Config {
                         let user_bindings = keys.to_keybinding_config();
                         config.keybindings.merge(user_bindings);
                     }
+
+                    // Load tool paths if configured
+                    if let Some(tools) = toml_config.tools {
+                        config.tool_paths = tools;
+                    }
                 }
             }
         }
@@ -426,4 +438,45 @@ impl Config {
             (output_tokens as f64 / 1_000_000.0) * self.claude_output_cost_per_million;
         input_cost + output_cost
     }
+}
+
+/// Save a tool path to the config file
+///
+/// This function reads the existing config.toml, adds or updates the tool path
+/// in the [tools] section, and writes it back while preserving all other content.
+pub fn save_tool_path(tool: Tool, path: &Path) -> std::io::Result<()> {
+    let config_file = config_path();
+
+    // Read existing config or start with empty document
+    let contents = if config_file.exists() {
+        fs::read_to_string(&config_file)?
+    } else {
+        String::new()
+    };
+
+    // Parse as TOML document
+    let mut doc: DocumentMut = contents
+        .parse()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    // Ensure [tools] section exists
+    if !doc.contains_key("tools") {
+        doc["tools"] = Item::Table(Table::new());
+    }
+
+    // Set the tool path
+    let path_str = path.to_string_lossy().to_string();
+    doc["tools"][tool.binary_name()] = toml_edit::value(path_str);
+
+    // Ensure parent directory exists
+    if let Some(parent) = config_file.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    // Write back to file
+    fs::write(&config_file, doc.to_string())?;
+
+    Ok(())
 }

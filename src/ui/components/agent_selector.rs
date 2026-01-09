@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::agent::AgentType;
+use crate::util::{Tool, ToolAvailability};
 
 use super::{DialogFrame, InstructionBar, SELECTED_BG};
 
@@ -54,6 +55,74 @@ impl AgentSelectorState {
                 },
             ],
         }
+    }
+
+    /// Create a new agent selector with only available agents
+    pub fn with_available_agents(tools: &ToolAvailability) -> Self {
+        let mut agents = Vec::new();
+
+        if tools.is_available(Tool::Claude) {
+            agents.push(AgentOption {
+                agent_type: AgentType::Claude,
+                name: "Claude Code",
+                description: "Anthropic's coding assistant",
+            });
+        }
+
+        if tools.is_available(Tool::Codex) {
+            agents.push(AgentOption {
+                agent_type: AgentType::Codex,
+                name: "Codex CLI",
+                description: "OpenAI's code generation model",
+            });
+        }
+
+        // If no agents available (shouldn't happen if startup validation passed),
+        // fall back to showing all options
+        if agents.is_empty() {
+            return Self::new();
+        }
+
+        Self {
+            visible: false,
+            selected: 0,
+            agents,
+        }
+    }
+
+    /// Update the available agents list based on tool availability
+    pub fn update_available_agents(&mut self, tools: &ToolAvailability) {
+        let mut agents = Vec::new();
+
+        if tools.is_available(Tool::Claude) {
+            agents.push(AgentOption {
+                agent_type: AgentType::Claude,
+                name: "Claude Code",
+                description: "Anthropic's coding assistant",
+            });
+        }
+
+        if tools.is_available(Tool::Codex) {
+            agents.push(AgentOption {
+                agent_type: AgentType::Codex,
+                name: "Codex CLI",
+                description: "OpenAI's code generation model",
+            });
+        }
+
+        // Only update if we have at least one agent
+        if !agents.is_empty() {
+            self.agents = agents;
+            // Ensure selected index is valid
+            if self.selected >= self.agents.len() {
+                self.selected = 0;
+            }
+        }
+    }
+
+    /// Check if a specific agent type is available
+    pub fn is_agent_available(&self, agent_type: AgentType) -> bool {
+        self.agents.iter().any(|a| a.agent_type == agent_type)
     }
 
     /// Show the dialog

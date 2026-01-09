@@ -165,6 +165,7 @@ impl KeyContext {
             InputMode::ShowingHelp => return KeyContext::HelpDialog,
             InputMode::ImportingSession => return KeyContext::SessionImport,
             InputMode::CommandPalette => return KeyContext::CommandPalette,
+            InputMode::MissingTool => return KeyContext::Dialog,
             // Non-modal modes - continue to check view mode
             InputMode::Normal | InputMode::Scrolling | InputMode::SidebarNavigation => {}
         }

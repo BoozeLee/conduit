@@ -6,8 +6,8 @@ use ratatui::layout::Rect;
 use crate::ui::components::{
     AddRepoDialogState, AgentSelectorState, BaseDirDialogState, CommandPaletteState,
     ConfirmationDialogState, ErrorDialogState, HelpDialogState, KnightRiderSpinner,
-    LogoShineAnimation, ModelSelectorState, ProjectPickerState, SessionImportPickerState,
-    SidebarData, SidebarState,
+    LogoShineAnimation, MissingToolDialogState, ModelSelectorState, ProjectPickerState,
+    SessionImportPickerState, SidebarData, SidebarState,
 };
 use crate::ui::events::{InputMode, ViewMode};
 use crate::ui::tab_manager::TabManager;
@@ -166,6 +166,7 @@ pub struct AppState {
     pub confirmation_dialog_state: ConfirmationDialogState,
     pub error_dialog_state: ErrorDialogState,
     pub help_dialog_state: HelpDialogState,
+    pub missing_tool_dialog_state: MissingToolDialogState,
     pub command_palette_state: CommandPaletteState,
     pub command_buffer: String,
     pub sidebar_area: Option<Rect>,
@@ -235,6 +236,7 @@ impl AppState {
             confirmation_dialog_state: ConfirmationDialogState::new(),
             error_dialog_state: ErrorDialogState::new(),
             help_dialog_state: HelpDialogState::new(),
+            missing_tool_dialog_state: MissingToolDialogState::default(),
             command_palette_state: CommandPaletteState::new(),
             command_buffer: String::new(),
             sidebar_area: None,
@@ -271,6 +273,7 @@ impl AppState {
         self.confirmation_dialog_state.hide();
         self.error_dialog_state.hide();
         self.help_dialog_state.hide();
+        self.missing_tool_dialog_state.hide();
         self.command_palette_state.hide();
     }
 
@@ -283,6 +286,7 @@ impl AppState {
             || self.confirmation_dialog_state.visible
             || self.error_dialog_state.is_visible()
             || self.help_dialog_state.is_visible()
+            || self.missing_tool_dialog_state.is_visible()
             || self.session_import_state.is_visible()
             || self.command_palette_state.is_visible()
     }

@@ -39,8 +39,8 @@ use crate::ui::clipboard_paste::paste_image_to_temp_png;
 use crate::ui::components::{
     scrollbar_offset_from_point, AddRepoDialog, AgentSelector, BaseDirDialog, ChatMessage,
     CommandPalette, ConfirmationContext, ConfirmationDialog, ConfirmationType, ErrorDialog,
-    EventDirection, GlobalFooter, HelpDialog, MessageRole, ModelSelector, ProcessingState,
-    ProjectPicker, RawEventsClick, RawEventsScrollbarMetrics, ScrollbarMetrics,
+    EventDirection, GlobalFooter, HelpDialog, MessageRole, MissingToolDialog, ModelSelector,
+    ProcessingState, ProjectPicker, RawEventsClick, RawEventsScrollbarMetrics, ScrollbarMetrics,
     SessionImportPicker, Sidebar, SidebarData, TabBar,
 };
 use crate::ui::effect::Effect;
@@ -49,6 +49,7 @@ use crate::ui::events::{
 };
 use crate::ui::session::AgentSession;
 use crate::ui::terminal_guard::TerminalGuard;
+use crate::util::ToolAvailability;
 
 /// Timeout for double-press detection (ms)
 const DOUBLE_PRESS_TIMEOUT_MS: u64 = 500;
@@ -57,6 +58,8 @@ const DOUBLE_PRESS_TIMEOUT_MS: u64 = 500;
 pub struct App {
     /// Application configuration
     config: Config,
+    /// Tool availability (git, gh, claude, codex)
+    tools: ToolAvailability,
     /// In-memory UI state
     state: AppState,
     /// Agent runners
@@ -85,7 +88,7 @@ impl App {
     // When true, selection drag auto-scrolls as soon as the cursor hits the first/last row.
     // When false, auto-scroll only starts after the cursor leaves the chat area.
     const AUTO_SCROLL_ON_EDGE_INCLUSIVE: bool = true;
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, tools: ToolAvailability) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         // Initialize database and DAOs
@@ -132,11 +135,22 @@ impl App {
             }
         });
 
+        // Create runners with configured paths if available
+        let claude_runner = match tools.get_path(crate::util::Tool::Claude) {
+            Some(path) => Arc::new(ClaudeCodeRunner::with_path(path.clone())),
+            None => Arc::new(ClaudeCodeRunner::new()),
+        };
+        let codex_runner = match tools.get_path(crate::util::Tool::Codex) {
+            Some(path) => Arc::new(CodexCliRunner::with_path(path.clone())),
+            None => Arc::new(CodexCliRunner::new()),
+        };
+
         let mut app = Self {
             config: config.clone(),
+            tools,
             state: AppState::new(config.max_tabs),
-            claude_runner: Arc::new(ClaudeCodeRunner::new()),
-            codex_runner: Arc::new(CodexCliRunner::new()),
+            claude_runner,
+            codex_runner,
             event_tx,
             event_rx,
             repo_dao,
@@ -146,6 +160,11 @@ impl App {
             worktree_manager,
             git_tracker,
         };
+
+        // Update agent selector based on available tools
+        app.state
+            .agent_selector_state
+            .update_available_agents(&app.tools);
 
         // Load sidebar data
         app.refresh_sidebar_data();
@@ -1386,6 +1405,9 @@ impl App {
                     InputMode::CommandPalette => {
                         self.state.command_palette_state.delete_char();
                     }
+                    InputMode::MissingTool => {
+                        self.state.missing_tool_dialog_state.backspace();
+                    }
                     _ => {
                         if let Some(session) = self.state.tab_manager.active_session_mut() {
                             session.input_box.backspace();
@@ -1394,7 +1416,9 @@ impl App {
                 }
             }
             Action::Delete => {
-                if let Some(session) = self.state.tab_manager.active_session_mut() {
+                if self.state.input_mode == InputMode::MissingTool {
+                    self.state.missing_tool_dialog_state.delete();
+                } else if let Some(session) = self.state.tab_manager.active_session_mut() {
                     session.input_box.delete();
                 }
             }
@@ -1706,6 +1730,30 @@ impl App {
                     self.state.error_dialog_state.hide();
                     self.state.input_mode = InputMode::Normal;
                 }
+                InputMode::MissingTool => {
+                    // Validate and save the path
+                    if let Some(result) = self.state.missing_tool_dialog_state.validate() {
+                        use crate::ui::components::MissingToolResult;
+                        match result {
+                            MissingToolResult::PathProvided(path) => {
+                                let tool = self.state.missing_tool_dialog_state.tool;
+                                // Update ToolAvailability
+                                self.tools.update_tool(tool, path.clone());
+                                // Save to config
+                                if let Err(e) = crate::config::save_tool_path(tool, &path) {
+                                    tracing::warn!("Failed to save tool path to config: {}", e);
+                                }
+                                self.state.missing_tool_dialog_state.hide();
+                                self.state.input_mode = InputMode::Normal;
+                            }
+                            MissingToolResult::Skipped | MissingToolResult::Quit => {
+                                self.state.missing_tool_dialog_state.hide();
+                                self.state.input_mode = InputMode::Normal;
+                            }
+                        }
+                    }
+                    // If validation failed, error is set in state and we stay in dialog
+                }
                 InputMode::CommandPalette => {
                     if let Some(entry) = self.state.command_palette_state.selected_entry() {
                         let action = entry.action.clone();
@@ -1758,6 +1806,10 @@ impl App {
                 }
                 InputMode::ShowingError => {
                     self.state.error_dialog_state.hide();
+                    self.state.input_mode = InputMode::Normal;
+                }
+                InputMode::MissingTool => {
+                    self.state.missing_tool_dialog_state.hide();
                     self.state.input_mode = InputMode::Normal;
                 }
                 InputMode::Scrolling => {
@@ -2523,6 +2575,9 @@ impl App {
             InputMode::CommandPalette => {
                 self.state.command_palette_state.insert_char(c);
             }
+            InputMode::MissingTool => {
+                self.state.missing_tool_dialog_state.insert_char(c);
+            }
             _ => {}
         }
     }
@@ -2574,6 +2629,12 @@ impl App {
                 let sanitized = pasted.replace('\n', " ");
                 for ch in sanitized.chars() {
                     self.state.command_palette_state.insert_char(ch);
+                }
+            }
+            InputMode::MissingTool => {
+                let sanitized = pasted.replace('\n', " ");
+                for ch in sanitized.chars() {
+                    self.state.missing_tool_dialog_state.insert_char(ch);
                 }
             }
             _ => {}
@@ -5201,11 +5262,13 @@ impl App {
         // Handle blocking errors
         if !preflight.gh_installed {
             self.state.confirmation_dialog_state.hide();
-            self.show_error_with_details(
-                "GitHub CLI Not Found",
-                "The 'gh' command is not installed.",
-                "Install from: https://cli.github.com/\n\nbrew install gh  # macOS\napt install gh   # Debian/Ubuntu",
+            // Show missing tool dialog with context about PR creation
+            self.state.close_overlays();
+            self.state.missing_tool_dialog_state.show_with_context(
+                crate::util::Tool::Gh,
+                "GitHub CLI (gh) is required for PR operations.",
             );
+            self.state.input_mode = crate::ui::events::InputMode::MissingTool;
             return effects;
         }
 
@@ -5487,6 +5550,13 @@ impl App {
                     if self.state.error_dialog_state.visible {
                         use ratatui::widgets::Widget;
                         let dialog = ErrorDialog::new(&self.state.error_dialog_state);
+                        dialog.render(size, f.buffer_mut());
+                    }
+
+                    // Draw missing tool dialog if open
+                    if self.state.missing_tool_dialog_state.is_visible() {
+                        use ratatui::widgets::Widget;
+                        let dialog = MissingToolDialog::new(&self.state.missing_tool_dialog_state);
                         dialog.render(size, f.buffer_mut());
                     }
 
@@ -5830,6 +5900,13 @@ impl App {
         if self.state.error_dialog_state.visible {
             use ratatui::widgets::Widget;
             let dialog = ErrorDialog::new(&self.state.error_dialog_state);
+            dialog.render(size, f.buffer_mut());
+        }
+
+        // Draw missing tool dialog (on top of everything except spinner)
+        if self.state.missing_tool_dialog_state.is_visible() {
+            use ratatui::widgets::Widget;
+            let dialog = MissingToolDialog::new(&self.state.missing_tool_dialog_state);
             dialog.render(size, f.buffer_mut());
         }
 
