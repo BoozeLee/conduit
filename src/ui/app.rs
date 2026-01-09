@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{
-        self, EnableMouseCapture, Event, KeyCode, KeyModifiers, KeyboardEnhancementFlags,
-        MouseButton, MouseEventKind, PushKeyboardEnhancementFlags,
+        self, EnableMouseCapture, Event, KeyCode, KeyModifiers,
+        MouseButton, MouseEventKind,
     },
     execute,
-    terminal::{enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen},
+    terminal::{enable_raw_mode, EnterAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -515,34 +515,8 @@ impl App {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
 
-        // Enable Kitty keyboard protocol for proper Ctrl+Shift detection
-        // This MUST be done before EnterAlternateScreen for proper detection
-        // Supported terminals: kitty, foot, WezTerm, alacritty, Ghostty
-        let keyboard_enhancement_enabled =
-            if supports_keyboard_enhancement().is_ok_and(|supported| supported) {
-                execute!(
-                    stdout,
-                    PushKeyboardEnhancementFlags(
-                        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                            | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-                            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-                    )
-                )
-                .is_ok()
-            } else {
-                false
-            };
-
-        if keyboard_enhancement_enabled {
-            tracing::info!("Kitty keyboard protocol enabled");
-        } else {
-            // Use debug level since this is feature detection, not an error -
-            // users cannot control their terminal's capabilities
-            tracing::debug!(
-                "Kitty keyboard protocol NOT available - Ctrl+Shift combos may not work"
-            );
-        }
-
+        // Kitty keyboard protocol disabled - causes terminal corruption on exit
+        let keyboard_enhancement_enabled = false;
         // Create terminal guard AFTER enabling features - Drop will clean up on any exit path
         let mut guard = TerminalGuard::new(keyboard_enhancement_enabled);
 

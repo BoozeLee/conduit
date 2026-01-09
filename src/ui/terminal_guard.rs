@@ -48,8 +48,10 @@ impl TerminalGuard {
     fn do_cleanup(&self) -> anyhow::Result<()> {
         let mut stdout = io::stdout();
         if self.keyboard_enhancement_enabled {
-            // Use let _ to ignore errors - we're in cleanup, best effort only
+            // Pop keyboard enhancement flags and flush immediately to ensure
+            // the terminal receives this before we change terminal modes
             let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+            let _ = stdout.flush();
         }
         disable_raw_mode()?;
         execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)?;
@@ -77,14 +79,16 @@ pub fn install_panic_hook() {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         // Best-effort terminal restoration before panic message is printed
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+        let _ = stdout.flush();
         let _ = disable_raw_mode();
         let _ = execute!(
-            io::stdout(),
-            PopKeyboardEnhancementFlags,
+            stdout,
             LeaveAlternateScreen,
             DisableMouseCapture
         );
-        let _ = io::stdout().flush();
+        let _ = stdout.flush();
 
         // Now call the original hook to print the panic
         original_hook(panic_info);
