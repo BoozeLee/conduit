@@ -2852,10 +2852,15 @@ impl App {
         // Update last accessed
         let _ = workspace_dao.update_last_accessed(workspace_id);
 
+        let tab_agent_type = saved_tab
+            .as_ref()
+            .map(|saved| saved.agent_type)
+            .unwrap_or(AgentType::Claude);
+
         // Create a new tab with the workspace's working directory
         self.state
             .tab_manager
-            .new_tab_with_working_dir(AgentType::Claude, workspace.path.clone());
+            .new_tab_with_working_dir(tab_agent_type, workspace.path.clone());
 
         // Store workspace info in session and restore chat history if available
         if let Some(session) = self.state.tab_manager.active_session_mut() {
@@ -2865,6 +2870,7 @@ impl App {
 
             // Restore saved session data if available
             if let Some(saved) = saved_tab {
+                session.agent_type = saved.agent_type;
                 session.model = saved.model;
 
                 // Restore chat history from agent files
@@ -2928,6 +2934,8 @@ impl App {
                     }
                 }
             }
+
+            session.update_status();
         }
 
         // Register workspace with git tracker for background status updates
