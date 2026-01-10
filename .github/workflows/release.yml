@@ -88,3 +88,10 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/**/*
+
+      - name: Announce on Discord
+        if: success()
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d '{"embeds":[{"title":"🚀 Conduit ${{ github.ref_name }} Released","description":"A new version of Conduit is available!","url":"https://github.com/conduit-cli/conduit/releases/tag/${{ github.ref_name }}","color":65416}]}' \
+            ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
