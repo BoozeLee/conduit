@@ -4,7 +4,8 @@
   "version": "0.0.1",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "npm run build:docs && astro build",
+    "build:docs": "cd .. && mdbook build docs && cp -r docs/book website/public/docs",
     "preview": "astro preview",
     "astro": "astro",
     "invite": "tsx scripts/invite.ts",
