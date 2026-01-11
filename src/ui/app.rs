@@ -894,6 +894,9 @@ impl App {
             let term_result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
             if term_result == -1 {
                 let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::ESRCH) {
+                    return true;
+                }
                 tracing::warn!(
                     error = %err,
                     pid,
@@ -903,6 +906,9 @@ impl App {
                 let kill_result = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
                 if kill_result == -1 {
                     let kill_err = std::io::Error::last_os_error();
+                    if kill_err.raw_os_error() == Some(libc::ESRCH) {
+                        return true;
+                    }
                     tracing::warn!(
                         error = %kill_err,
                         pid,
@@ -929,11 +935,11 @@ impl App {
         let mut pid = None;
         {
             if let Some(session) = self.state.tab_manager.session_mut(tab_index) {
-                pid = session.agent_pid.take();
+                Self::flush_pending_agent_output(session);
                 if session.is_processing {
                     session.stop_processing();
-                    session.chat_view.finalize_streaming();
                 }
+                pid = session.agent_pid.take();
             }
         }
 
@@ -1370,9 +1376,6 @@ impl App {
             Action::CloseTab => {
                 let active = self.state.tab_manager.active_index();
                 self.stop_agent_for_tab(active);
-                // Save session state BEFORE closing so the tab info is preserved
-                // This needs to be synchronous because the effect runs after tab removal
-                self.persist_session_state_on_exit();
                 self.state.tab_manager.close_tab(active);
                 if self.state.tab_manager.is_empty() {
                     self.state.sidebar_state.visible = true;
@@ -1381,6 +1384,7 @@ impl App {
                     self.sync_sidebar_to_active_tab();
                     self.sync_footer_spinner();
                 }
+                effects.push(Effect::SaveSessionState);
             }
             Action::NextTab => {
                 // Include sidebar in tab cycle when visible
@@ -2442,7 +2446,10 @@ impl App {
                             Err(e) => {
                                 send_app_event(
                                     &event_tx,
-                                    AppEvent::Error(format!("Agent error: {}", e)),
+                                    AppEvent::AgentStartFailed {
+                                        session_id,
+                                        error: format!("Agent error: {}", e),
+                                    },
                                     "agent_start_error",
                                 );
                                 send_app_event(
@@ -5770,6 +5777,25 @@ Acknowledge that you have received this context by replying ONLY with the single
                         };
                         session.chat_view.push(display.to_chat_message());
                     }
+                }
+            }
+            AppEvent::AgentStartFailed { session_id, error } => {
+                let Some(tab_index) = self.state.tab_manager.session_index_by_id(session_id) else {
+                    tracing::debug!(
+                        %session_id,
+                        "AgentStartFailed for unknown session; ignoring"
+                    );
+                    return Ok(effects);
+                };
+                let is_active_tab = self.state.tab_manager.active_index() == tab_index;
+                if let Some(session) = self.state.tab_manager.session_mut(tab_index) {
+                    session.stop_processing();
+                    session.chat_view.finalize_streaming();
+                    let display = MessageDisplay::Error { content: error };
+                    session.chat_view.push(display.to_chat_message());
+                }
+                if is_active_tab {
+                    self.state.stop_footer_spinner();
                 }
             }
             AppEvent::AgentStreamEnded { session_id } => {
