@@ -19,6 +19,8 @@ pub enum AppEvent {
 
     /// Agent subprocess started with given PID
     AgentStarted { session_id: Uuid, pid: u32 },
+    /// Agent failed to start for a specific session
+    AgentStartFailed { session_id: Uuid, error: String },
 
     /// User submitted a prompt
     PromptSubmit { tab_index: usize, prompt: String },
