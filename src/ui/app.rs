@@ -5698,13 +5698,16 @@ Acknowledge that you have received this context by replying ONLY with the single
                         // Safety: don't let fork-seed suppression leak into future runs
                         session.suppress_next_assistant_reply = false;
                         session.suppress_next_turn_summary = false;
-                        if session.is_processing {
+                        let was_processing = if session.is_processing {
                             session.stop_processing();
                             session.chat_view.finalize_streaming();
                             true
                         } else {
                             false
-                        }
+                        };
+                        Self::flush_pending_agent_output(session);
+                        session.tools_in_flight = 0;
+                        was_processing
                     } else {
                         false
                     };
@@ -5767,6 +5770,14 @@ Acknowledge that you have received this context by replying ONLY with the single
                         session.title = Some(generated.title.clone());
                         if let Some(new_branch) = &generated.new_branch {
                             session.status_bar.set_branch_name(Some(new_branch.clone()));
+                        }
+
+                        if generated.used_fallback {
+                            let tool = generated.tool_used.as_deref().unwrap_or("fallback tool");
+                            self.state.set_timed_footer_message(
+                                format!("Title generated via {} after fallback", tool),
+                                Duration::from_secs(4),
+                            );
                         }
 
                         // Update sidebar directly with new branch name
@@ -5885,6 +5896,15 @@ Acknowledge that you have received this context by replying ONLY with the single
         }
     }
 
+    fn flush_pending_agent_output(session: &mut crate::ui::session::AgentSession) {
+        if let Some(text) = session.pending_final_assistant_message.take() {
+            session.chat_view.push(ChatMessage::assistant(text));
+        }
+        if let Some(summary) = session.pending_turn_summary.take() {
+            session.chat_view.push(ChatMessage::turn_summary(summary));
+        }
+    }
+
     async fn handle_agent_event(
         &mut self,
         tab_index: usize,
@@ -5948,7 +5968,7 @@ Acknowledge that you have received this context by replying ONLY with the single
                         session.suppress_next_turn_summary = false;
                     } else {
                         let summary = session.current_turn_summary.clone();
-                        session.chat_view.push(ChatMessage::turn_summary(summary));
+                        session.pending_turn_summary = Some(summary);
                     }
                 }
                 AgentEvent::TurnFailed(failed) => {
@@ -5984,11 +6004,7 @@ Acknowledge that you have received this context by replying ONLY with the single
                     }
 
                     if msg.is_final {
-                        let display = MessageDisplay::Assistant {
-                            content: msg.text,
-                            is_streaming: false,
-                        };
-                        session.chat_view.push(display.to_chat_message());
+                        session.pending_final_assistant_message = Some(msg.text);
                     } else {
                         session.chat_view.stream_append(&msg.text);
                     }
@@ -5996,6 +6012,7 @@ Acknowledge that you have received this context by replying ONLY with the single
                 AgentEvent::ToolStarted(tool) => {
                     // Update processing state to show tool name
                     session.set_processing_state(ProcessingState::ToolUse(tool.tool_name.clone()));
+                    session.tools_in_flight = session.tools_in_flight.saturating_add(1);
 
                     let args_str = if tool.arguments.is_null() {
                         String::new()
@@ -6022,6 +6039,7 @@ Acknowledge that you have received this context by replying ONLY with the single
 
                     // Return to thinking state
                     session.set_processing_state(ProcessingState::Thinking);
+                    session.tools_in_flight = session.tools_in_flight.saturating_sub(1);
 
                     // Track file changes for write/edit tools
                     if tool.success {
@@ -6065,6 +6083,9 @@ Acknowledge that you have received this context by replying ONLY with the single
                         .update_last_tool(cmd.output.clone(), cmd.exit_code)
                     {
                         tracing::warn!("CommandOutput: no matching tool message found to update");
+                    }
+                    if !cmd.is_streaming {
+                        session.tools_in_flight = session.tools_in_flight.saturating_sub(1);
                     }
                 }
                 AgentEvent::Error(err) => {
@@ -6161,6 +6182,10 @@ Acknowledge that you have received this context by replying ONLY with the single
         hidden: bool,
     ) -> anyhow::Result<Vec<Effect>> {
         let mut effects = Vec::new();
+
+        if let Some(session) = self.state.tab_manager.session_mut(tab_index) {
+            Self::flush_pending_agent_output(session);
+        }
 
         // Extract session info in a limited borrow scope
         // NOTE: We don't take() resume_session_id here because early returns below
@@ -8536,6 +8561,8 @@ async fn generate_title_and_branch_impl(
         title: sanitize_title(&metadata.title),
         new_branch,
         workspace_id,
+        tool_used: metadata.tool_used.clone(),
+        used_fallback: metadata.used_fallback,
     })
 }
 
