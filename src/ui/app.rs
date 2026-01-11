@@ -6021,9 +6021,6 @@ Acknowledge that you have received this context by replying ONLY with the single
         if let Some(summary) = session.pending_turn_summary.take() {
             session.chat_view.push(ChatMessage::turn_summary(summary));
         }
-        if let Some(text) = session.pending_final_assistant_message.take() {
-            session.chat_view.push(ChatMessage::assistant(text));
-        }
     }
 
     async fn handle_agent_event(
@@ -6131,11 +6128,7 @@ Acknowledge that you have received this context by replying ONLY with the single
                         }
                     }
 
-                    if msg.is_final {
-                        session.pending_final_assistant_message = Some(msg.text);
-                    } else {
-                        session.chat_view.stream_append(&msg.text);
-                    }
+                    session.chat_view.stream_append(&msg.text);
                 }
                 AgentEvent::ToolStarted(tool) => {
                     // Update processing state to show tool name
@@ -8970,10 +8963,7 @@ mod tests {
                 .tab_manager
                 .session_by_id_mut(session_b)
                 .expect("session B missing");
-            assert_eq!(
-                session.pending_final_assistant_message.as_deref(),
-                Some("message for B")
-            );
+            assert_eq!(session.chat_view.streaming_buffer(), Some("message for B"));
         }
 
         {
@@ -8982,7 +8972,7 @@ mod tests {
                 .tab_manager
                 .session_by_id_mut(session_c)
                 .expect("session C missing");
-            assert!(session.pending_final_assistant_message.is_none());
+            assert!(session.chat_view.streaming_buffer().is_none());
         }
     }
 }
