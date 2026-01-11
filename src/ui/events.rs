@@ -125,6 +125,10 @@ pub struct TitleGeneratedResult {
     pub new_branch: Option<String>,
     /// Associated workspace ID
     pub workspace_id: Option<Uuid>,
+    /// Tool used to generate the title
+    pub tool_used: Option<String>,
+    /// Whether the generation fell back to a secondary tool
+    pub used_fallback: bool,
 }
 
 #[derive(Debug, Clone)]

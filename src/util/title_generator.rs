@@ -13,7 +13,7 @@ use tokio::process::Command;
 use super::{Tool, ToolAvailability};
 
 /// Timeout for AI title generation calls
-const AI_CALL_TIMEOUT_SECS: u64 = 10;
+const AI_CALL_TIMEOUT_SECS: u64 = 20;
 
 /// Result of title/branch generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +22,12 @@ pub struct GeneratedMetadata {
     pub title: String,
     /// Short branch name suffix (kebab-case, no slashes)
     pub branch_suffix: String,
+    /// Tool used to generate the metadata (set by caller)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_used: Option<String>,
+    /// Whether the result came from a fallback tool
+    #[serde(default)]
+    pub used_fallback: bool,
 }
 
 /// Error during title generation
@@ -45,15 +51,6 @@ pub async fn generate_title_and_branch(
     user_message: &str,
     working_dir: &PathBuf,
 ) -> Result<GeneratedMetadata, TitleGeneratorError> {
-    // Prefer Claude (sonnet), fall back to Codex
-    let (is_claude, tool_path) = if tools.is_available(Tool::Claude) {
-        (true, tools.get_path(Tool::Claude).unwrap().clone())
-    } else if tools.is_available(Tool::Codex) {
-        (false, tools.get_path(Tool::Codex).unwrap().clone())
-    } else {
-        return Err(TitleGeneratorError::NoToolAvailable);
-    };
-
     let prompt = format!(
         r#"Based on this user request, generate:
 1. A concise one-line title (max 50 chars) describing the task
@@ -66,21 +63,64 @@ Respond ONLY with valid JSON (no markdown, no explanation):
         truncate_message(user_message, 500)
     );
 
-    let result = if is_claude {
-        tokio::time::timeout(
+    let mut failures: Vec<(Tool, TitleGeneratorError)> = Vec::new();
+
+    if tools.is_available(Tool::Claude) {
+        let tool_path = tools.get_path(Tool::Claude).unwrap().clone();
+        let result = tokio::time::timeout(
             Duration::from_secs(AI_CALL_TIMEOUT_SECS),
             call_claude(&tool_path, &prompt, working_dir),
         )
-        .await
-    } else {
-        tokio::time::timeout(
+        .await;
+        match result {
+            Ok(Ok(mut metadata)) => {
+                metadata.tool_used = Some(Tool::Claude.display_name().to_string());
+                metadata.used_fallback = false;
+                return Ok(metadata);
+            }
+            Ok(Err(err)) => failures.push((Tool::Claude, err)),
+            Err(_) => failures.push((
+                Tool::Claude,
+                TitleGeneratorError::Timeout(AI_CALL_TIMEOUT_SECS),
+            )),
+        }
+    }
+
+    if tools.is_available(Tool::Codex) {
+        let tool_path = tools.get_path(Tool::Codex).unwrap().clone();
+        let result = tokio::time::timeout(
             Duration::from_secs(AI_CALL_TIMEOUT_SECS),
             call_codex(&tool_path, &prompt, working_dir),
         )
-        .await
-    };
+        .await;
+        match result {
+            Ok(Ok(mut metadata)) => {
+                metadata.tool_used = Some(Tool::Codex.display_name().to_string());
+                metadata.used_fallback = !failures.is_empty();
+                return Ok(metadata);
+            }
+            Ok(Err(err)) => failures.push((Tool::Codex, err)),
+            Err(_) => failures.push((
+                Tool::Codex,
+                TitleGeneratorError::Timeout(AI_CALL_TIMEOUT_SECS),
+            )),
+        }
+    }
 
-    result.map_err(|_| TitleGeneratorError::Timeout(AI_CALL_TIMEOUT_SECS))?
+    if failures.is_empty() {
+        return Err(TitleGeneratorError::NoToolAvailable);
+    }
+    if failures.len() == 1 {
+        return Err(failures.pop().unwrap().1);
+    }
+
+    let details = failures
+        .into_iter()
+        .map(|(tool, err)| format!("{}: {}", tool.display_name(), err))
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    Err(TitleGeneratorError::AiCallFailed(details))
 }
 
 async fn call_claude(
