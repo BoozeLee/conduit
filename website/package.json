@@ -13,7 +13,9 @@
     "test-welcome-email": "tsx scripts/test-welcome-email.ts",
     "reset-invite": "tsx scripts/reset-invite.ts",
     "tail": "tsx scripts/tail.ts",
-    "resend-correction": "tsx scripts/resend-correction.ts"
+    "resend-correction": "tsx scripts/resend-correction.ts",
+    "admin": "tsx scripts/admin.ts",
+    "poll-waitlist-events": "tsx scripts/poll-waitlist-events.ts"
   },
   "devDependencies": {
     "dotenv": "^17.2.3",
