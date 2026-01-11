@@ -59,6 +59,7 @@ use crate::util::ToolAvailability;
 
 /// Timeout for double-press detection (ms)
 const DOUBLE_PRESS_TIMEOUT_MS: u64 = 500;
+const AGENT_SHUTDOWN_TIMEOUT_SECS: u64 = 20;
 
 /// Main application state
 pub struct App {
@@ -2421,18 +2422,54 @@ impl App {
                                             session_id = %session_id,
                                             "Failed to send AppEvent for agent stream"
                                         );
-                                        if let Err(stop_err) = runner.stop(&handle).await {
-                                            tracing::debug!(
-                                                session_id = %session_id,
-                                                error = %stop_err,
-                                                "Failed to stop agent after event channel closed"
-                                            );
-                                            if let Err(kill_err) = runner.kill(&handle).await {
+                                        let stop_result = tokio::time::timeout(
+                                            Duration::from_secs(AGENT_SHUTDOWN_TIMEOUT_SECS),
+                                            runner.stop(&handle),
+                                        )
+                                        .await;
+                                        let mut stop_ok = false;
+                                        match stop_result {
+                                            Ok(Ok(())) => {
+                                                stop_ok = true;
+                                            }
+                                            Ok(Err(stop_err)) => {
                                                 tracing::debug!(
                                                     session_id = %session_id,
-                                                    error = %kill_err,
-                                                    "Failed to kill agent after event channel closed"
+                                                    error = %stop_err,
+                                                    "Failed to stop agent after event channel closed"
                                                 );
+                                            }
+                                            Err(_) => {
+                                                tracing::debug!(
+                                                    session_id = %session_id,
+                                                    timeout_secs = AGENT_SHUTDOWN_TIMEOUT_SECS,
+                                                    "Timed out stopping agent after event channel closed"
+                                                );
+                                            }
+                                        }
+
+                                        if !stop_ok {
+                                            let kill_result = tokio::time::timeout(
+                                                Duration::from_secs(AGENT_SHUTDOWN_TIMEOUT_SECS),
+                                                runner.kill(&handle),
+                                            )
+                                            .await;
+                                            match kill_result {
+                                                Ok(Ok(())) => {}
+                                                Ok(Err(kill_err)) => {
+                                                    tracing::debug!(
+                                                        session_id = %session_id,
+                                                        error = %kill_err,
+                                                        "Failed to kill agent after event channel closed"
+                                                    );
+                                                }
+                                                Err(_) => {
+                                                    tracing::debug!(
+                                                        session_id = %session_id,
+                                                        timeout_secs = AGENT_SHUTDOWN_TIMEOUT_SECS,
+                                                        "Timed out killing agent after event channel closed"
+                                                    );
+                                                }
                                             }
                                         }
                                         break;
@@ -6041,7 +6078,9 @@ Acknowledge that you have received this context by replying ONLY with the single
         let is_content_event = matches!(
             &event,
             AgentEvent::AssistantMessage(_)
+                | AgentEvent::ToolStarted(_)
                 | AgentEvent::ToolCompleted(_)
+                | AgentEvent::CommandOutput(_)
                 | AgentEvent::TurnCompleted(_)
                 | AgentEvent::TurnFailed(_)
         );
