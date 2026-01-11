@@ -70,9 +70,6 @@ impl CodexCliRunner {
         // Enable web search
         cmd.arg("-c").arg("features.web_search_request=true");
 
-        // Enable skills
-        cmd.arg("--enable").arg("skills");
-
         // --yolo bypasses approvals and sandbox restrictions
         // Required for git operations in worktrees and complex repo structures
         cmd.arg("--yolo");
