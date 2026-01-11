@@ -1378,6 +1378,7 @@ impl App {
                 self.stop_agent_for_tab(active);
                 self.state.tab_manager.close_tab(active);
                 if self.state.tab_manager.is_empty() {
+                    self.state.stop_footer_spinner();
                     self.state.sidebar_state.visible = true;
                     self.state.input_mode = InputMode::SidebarNavigation;
                 } else {
@@ -6098,6 +6099,7 @@ Acknowledge that you have received this context by replying ONLY with the single
                 }
                 AgentEvent::TurnFailed(failed) => {
                     session.stop_processing();
+                    session.chat_view.finalize_streaming();
                     // Only stop footer spinner if this is the active tab
                     if is_active_tab {
                         should_stop_footer_spinner = true;
@@ -6232,6 +6234,7 @@ Acknowledge that you have received this context by replying ONLY with the single
                     session.chat_view.push(display.to_chat_message());
                     if err.is_fatal {
                         session.stop_processing();
+                        session.chat_view.finalize_streaming();
                         // Only stop footer spinner if this is the active tab
                         if is_active_tab {
                             should_stop_footer_spinner = true;
