@@ -6935,7 +6935,7 @@ Acknowledge that you have received this context by replying ONLY with the single
                         session.status_bar.set_branch_name(branch.clone());
                     }
                 }
-                // Always update sidebar data (including None for detached HEAD)
+                // Always update sidebar data (including detached indicator)
                 self.state
                     .sidebar_data
                     .update_workspace_branch(workspace_id, branch);

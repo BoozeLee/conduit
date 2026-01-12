@@ -332,7 +332,8 @@ impl PrManager {
         let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         if branch.is_empty() {
-            None // Detached HEAD
+            // Detached HEAD
+            Some("(detached)".to_string())
         } else {
             Some(branch)
         }
@@ -568,6 +569,38 @@ Follow these exact steps to create a PR:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::path::Path;
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    fn run_git(path: &Path, args: &[&str]) -> io::Result<String> {
+        let output = Command::new("git").args(args).current_dir(path).output()?;
+        if !output.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "git {} failed: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    fn init_git_repo(path: &Path) -> io::Result<()> {
+        run_git(path, &["init"])?;
+        run_git(path, &["config", "user.email", "test@test.com"])?;
+        run_git(path, &["config", "user.name", "Test"])?;
+
+        std::fs::write(path.join("README.md"), "# Test")?;
+        run_git(path, &["add", "."])?;
+        run_git(path, &["commit", "-m", "Initial commit"])?;
+
+        Ok(())
+    }
 
     #[test]
     fn test_is_main_branch() {
@@ -597,6 +630,27 @@ mod tests {
         assert!(prompt.contains("origin/main"));
         assert!(prompt.contains("no upstream branch"));
         assert!(prompt.contains("gh pr create --base main"));
+    }
+
+    #[test]
+    fn test_get_current_branch_detached() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+
+        let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        run_git(dir.path(), &["checkout", "--detach", &head_sha]).unwrap();
+
+        let branch = PrManager::get_current_branch(dir.path());
+        assert_eq!(branch.as_deref(), Some("(detached)"));
+    }
+
+    #[test]
+    fn test_get_current_branch_on_branch() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+
+        let branch = PrManager::get_current_branch(dir.path());
+        assert!(matches!(branch.as_deref(), Some("main") | Some("master")));
     }
 
     #[test]
