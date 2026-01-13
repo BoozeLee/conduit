@@ -1,5 +1,7 @@
 pub mod action;
 pub mod app;
+pub mod app_prompt;
+pub mod app_queue;
 pub mod app_state;
 pub mod capabilities;
 pub mod clipboard_paste;

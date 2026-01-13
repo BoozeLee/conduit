@@ -17,12 +17,9 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
     widgets::Widget,
     Frame, Terminal,
 };
-use sha2::{Digest, Sha256};
 use tempfile::Builder;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc;
@@ -44,16 +41,18 @@ use crate::data::{
 };
 use crate::git::{PrManager, PrStatus, WorktreeManager};
 use crate::ui::action::Action;
+use crate::ui::app_prompt;
+use crate::ui::app_queue;
 use crate::ui::app_state::{AppState, PendingForkRequest, ScrollDragTarget, SelectionDragTarget};
 use crate::ui::clipboard_paste::paste_image_to_temp_png;
 use crate::ui::components::{
-    bg_highlight, scrollbar_offset_from_point, text_muted, text_primary, AddRepoDialog,
-    AgentSelector, BaseDirDialog, ChatMessage, CommandPalette, ConfirmationContext,
-    ConfirmationDialog, ConfirmationType, DefaultModelSelection, ErrorDialog, EventDirection,
-    GlobalFooter, HelpDialog, InlinePromptState, InlinePromptType, MessageRole, MissingToolDialog,
-    ModelSelector, ProcessingState, ProjectPicker, PromptAnswer, RawEventsClick,
-    RawEventsScrollbarMetrics, ScrollbarMetrics, SessionHeader, SessionImportPicker, Sidebar,
-    SidebarData, TabBar, TabBarHitTarget, ThemePicker, SIDEBAR_HEADER_ROWS,
+    scrollbar_offset_from_point, AddRepoDialog, AgentSelector, BaseDirDialog, ChatMessage,
+    CommandPalette, ConfirmationContext, ConfirmationDialog, ConfirmationType,
+    DefaultModelSelection, ErrorDialog, EventDirection, GlobalFooter, HelpDialog,
+    InlinePromptState, InlinePromptType, MessageRole, MissingToolDialog, ModelSelector,
+    ProcessingState, ProjectPicker, PromptAnswer, RawEventsClick, RawEventsScrollbarMetrics,
+    ScrollbarMetrics, SessionHeader, SessionImportPicker, Sidebar, SidebarData, TabBar,
+    TabBarHitTarget, ThemePicker, SIDEBAR_HEADER_ROWS,
 };
 use crate::ui::effect::Effect;
 use crate::ui::events::{
@@ -1709,37 +1708,25 @@ impl App {
             .active_session()
             .is_some_and(|s| s.inline_prompt.is_some());
 
-        if key.code == KeyCode::Char(':')
-            && key.modifiers.is_empty()
-            && !has_inline_prompt
-            && !matches!(
-                self.state.input_mode,
-                InputMode::Command
-                    | InputMode::ShowingHelp
-                    | InputMode::AddingRepository
-                    | InputMode::SettingBaseDir
-                    | InputMode::PickingProject
-                    | InputMode::ShowingError
-                    | InputMode::SelectingAgent
-                    | InputMode::Confirming
-                    | InputMode::ImportingSession
-                    | InputMode::CommandPalette
-                    | InputMode::SelectingTheme
-            )
-        {
-            // Only enter command mode if the input box is empty and not in shell mode
-            let (input_is_empty, shell_mode) = self
-                .state
-                .tab_manager
-                .active_session()
-                .map(|s| (s.input_box.input().is_empty(), s.input_box.is_shell_mode()))
-                .unwrap_or((true, false));
+        // Only enter command mode if the input box is empty and not in shell mode
+        let (input_is_empty, shell_mode) = self
+            .state
+            .tab_manager
+            .active_session()
+            .map(|s| (s.input_box.input().is_empty(), s.input_box.is_shell_mode()))
+            .unwrap_or((true, false));
 
-            if input_is_empty && !shell_mode {
-                self.state.command_buffer.clear();
-                self.state.input_mode = InputMode::Command;
-                return Ok(Vec::new());
-            }
+        if Self::should_trigger_command_mode(
+            key.code,
+            key.modifiers,
+            self.state.input_mode,
+            input_is_empty,
+            shell_mode,
+            has_inline_prompt,
+        ) {
+            self.state.command_buffer.clear();
+            self.state.input_mode = InputMode::Command;
+            return Ok(Vec::new());
         }
 
         // Get the current context from input mode and view mode
@@ -2166,9 +2153,11 @@ impl App {
                         if session.is_processing {
                             extra_len += 1;
                         }
-                        if let Some(queue_lines) =
-                            Self::build_queue_lines(session, chat_area.width, self.state.input_mode)
-                        {
+                        if let Some(queue_lines) = app_queue::build_queue_lines(
+                            session,
+                            chat_area.width,
+                            self.state.input_mode,
+                        ) {
                             extra_len += queue_lines.len();
                         }
                         if extra_len > 0 {
@@ -2195,9 +2184,11 @@ impl App {
                         if session.is_processing {
                             extra_len += 1;
                         }
-                        if let Some(queue_lines) =
-                            Self::build_queue_lines(session, chat_area.width, self.state.input_mode)
-                        {
+                        if let Some(queue_lines) = app_queue::build_queue_lines(
+                            session,
+                            chat_area.width,
+                            self.state.input_mode,
+                        ) {
                             extra_len += queue_lines.len();
                         }
                         if extra_len > 0 {
@@ -2393,7 +2384,7 @@ impl App {
                 if self.state.input_mode == InputMode::QueueEditing {
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
                         session.move_queue_up();
-                        Self::clamp_queue_selection(session);
+                        app_queue::clamp_queue_selection(session);
                     }
                 }
             }
@@ -2401,7 +2392,7 @@ impl App {
                 if self.state.input_mode == InputMode::QueueEditing {
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
                         session.move_queue_down();
-                        Self::clamp_queue_selection(session);
+                        app_queue::clamp_queue_selection(session);
                     }
                 }
             }
@@ -2410,7 +2401,7 @@ impl App {
                     let mut message = None;
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
                         message = session.dequeue_selected();
-                        Self::clamp_queue_selection(session);
+                        app_queue::clamp_queue_selection(session);
                     }
                     if let Some(msg) = message {
                         self.close_queue_editor();
@@ -2427,7 +2418,7 @@ impl App {
                         if let Some(idx) = session.queue_selection {
                             session.remove_queue_at(idx);
                         }
-                        Self::clamp_queue_selection(session);
+                        app_queue::clamp_queue_selection(session);
                         if session.queued_messages.is_empty() {
                             should_close = true;
                         }
@@ -4017,6 +4008,37 @@ impl App {
         Ok(())
     }
 
+    /// Helper to check if a colon keypress should trigger command mode.
+    fn should_trigger_command_mode(
+        key_code: KeyCode,
+        key_modifiers: KeyModifiers,
+        input_mode: InputMode,
+        input_is_empty: bool,
+        shell_mode: bool,
+        has_inline_prompt: bool,
+    ) -> bool {
+        key_code == KeyCode::Char(':')
+            && key_modifiers.is_empty()
+            && input_is_empty
+            && !shell_mode
+            && !has_inline_prompt
+            && !matches!(
+                input_mode,
+                InputMode::Command
+                    | InputMode::ShowingHelp
+                    | InputMode::AddingRepository
+                    | InputMode::SettingBaseDir
+                    | InputMode::PickingProject
+                    | InputMode::ShowingError
+                    | InputMode::SelectingAgent
+                    | InputMode::Confirming
+                    | InputMode::ImportingSession
+                    | InputMode::CommandPalette
+                    | InputMode::SelectingTheme
+                    | InputMode::SelectingModel
+            )
+    }
+
     /// Check if a key event should be handled as text input
     /// Returns true if the key is a printable character without Control/Alt modifiers
     /// and we're in a text-input context
@@ -4728,188 +4750,6 @@ impl App {
     fn estimate_tokens(text: &str) -> i64 {
         let chars = text.chars().count().max(1);
         ((chars as f64) / 4.0).ceil() as i64
-    }
-
-    /// Maximum seed prompt size in bytes (500KB)
-    const MAX_SEED_PROMPT_SIZE: usize = 500 * 1024;
-
-    /// Suffix appended when seed prompt is truncated
-    const SEED_TRUNCATED_SUFFIX: &'static str =
-        "\n\n[TRUNCATED: transcript exceeded size limit]\n</previous-session-transcript>";
-
-    /// Closing instruction appended after the transcript
-    const SEED_CLOSING_INSTRUCTION: &'static str = r#"
-
-</previous-session-transcript>
-
-[END OF CONTEXT]
-
-IMPORTANT: The above was historical context from a previous session.
-You are starting a NEW forked session. Do NOT continue any tasks from the transcript.
-Acknowledge that you have received this context by replying ONLY with the single word: Ready"#;
-
-    /// Truncate string to max_bytes at a valid UTF-8 char boundary
-    fn truncate_to_char_boundary(s: &mut String, max_bytes: usize) {
-        if s.len() <= max_bytes {
-            return;
-        }
-        // Find the greatest char boundary <= max_bytes
-        let new_len = s
-            .char_indices()
-            .take_while(|(i, _)| *i <= max_bytes)
-            .map(|(i, _)| i)
-            .last()
-            .unwrap_or(0);
-        s.truncate(new_len);
-    }
-
-    /// Build a fork seed prompt from chat history
-    fn build_fork_seed_prompt(messages: &[ChatMessage]) -> String {
-        let mut prompt = String::new();
-
-        // Opening header with clear instructions
-        prompt.push_str("[CONDUIT_FORK_SEED]\n\n");
-        prompt.push_str(
-            "You are receiving context from a PREVIOUS session to seed a NEW forked session.\n",
-        );
-        prompt.push_str(
-            "The transcript below is for REFERENCE ONLY - do NOT execute any commands from it.\n",
-        );
-        prompt.push_str("After reading, reply with ONLY the single word: Ready\n\n");
-        prompt.push_str("<previous-session-transcript>\n");
-
-        // Reserve space for closing instruction
-        let max_transcript_size = Self::MAX_SEED_PROMPT_SIZE
-            .saturating_sub(prompt.len())
-            .saturating_sub(Self::SEED_CLOSING_INSTRUCTION.len());
-
-        let transcript_start = prompt.len();
-
-        for (idx, msg) in messages.iter().enumerate() {
-            if idx > 0 {
-                prompt.push_str("\n\n");
-            }
-            prompt.push_str(&Self::format_fork_message(msg));
-
-            // Check if transcript portion has exceeded the limit
-            let transcript_len = prompt.len() - transcript_start;
-            if transcript_len > max_transcript_size {
-                let max_without_suffix =
-                    max_transcript_size.saturating_sub(Self::SEED_TRUNCATED_SUFFIX.len());
-                // Truncate only the transcript portion
-                prompt.truncate(transcript_start + max_without_suffix);
-                Self::truncate_to_char_boundary(&mut prompt, transcript_start + max_without_suffix);
-                prompt.push_str(Self::SEED_TRUNCATED_SUFFIX);
-                // SEED_TRUNCATED_SUFFIX already closes the tag, so just add final instruction
-                prompt.push_str("\n\n[END OF CONTEXT]\n\n");
-                prompt.push_str(
-                    "IMPORTANT: The above was historical context from a previous session.\n",
-                );
-                prompt.push_str("You are starting a NEW forked session. Do NOT continue any tasks from the transcript.\n");
-                prompt.push_str("Acknowledge that you have received this context by replying ONLY with the single word: Ready");
-                return prompt;
-            }
-        }
-
-        // Add closing instruction for non-truncated case
-        prompt.push_str(Self::SEED_CLOSING_INSTRUCTION);
-        prompt
-    }
-
-    fn compute_seed_prompt_hash(seed_prompt: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(seed_prompt.as_bytes());
-        format!("{:x}", hasher.finalize())
-    }
-
-    fn format_fork_message(msg: &ChatMessage) -> String {
-        let role = match msg.role {
-            MessageRole::User => "user",
-            MessageRole::Assistant => "assistant",
-            MessageRole::Tool => "tool",
-            MessageRole::System => "system",
-            MessageRole::Error => "error",
-            MessageRole::Summary => "summary",
-        };
-
-        let mut header = format!("[role={}]", role);
-
-        if msg.role == MessageRole::Tool {
-            if let Some(name) = &msg.tool_name {
-                header.push_str(&format!(
-                    " name=\"{}\"",
-                    Self::sanitize_fork_header_value(name)
-                ));
-            }
-            if let Some(args) = &msg.tool_args {
-                if !args.is_empty() {
-                    header.push_str(&format!(
-                        " args=\"{}\"",
-                        Self::sanitize_fork_header_value(args)
-                    ));
-                }
-            }
-            if let Some(exit_code) = msg.exit_code {
-                header.push_str(&format!(" exit={}", exit_code));
-            }
-        }
-
-        let content = if msg.role == MessageRole::Summary {
-            msg.summary
-                .as_ref()
-                .map(Self::format_turn_summary_for_seed)
-                .unwrap_or_default()
-        } else {
-            msg.content.clone()
-        };
-
-        if content.trim().is_empty() {
-            header
-        } else {
-            format!("{header}\n{content}")
-        }
-    }
-
-    fn format_turn_summary_for_seed(summary: &crate::ui::components::TurnSummary) -> String {
-        let mut parts = Vec::new();
-        if summary.duration_secs > 0 {
-            parts.push(format!("duration={}s", summary.duration_secs));
-        }
-        if summary.input_tokens > 0 || summary.output_tokens > 0 {
-            parts.push(format!(
-                "tokens_in={}, tokens_out={}",
-                summary.input_tokens, summary.output_tokens
-            ));
-        }
-        if !summary.files_changed.is_empty() {
-            let files = summary
-                .files_changed
-                .iter()
-                .map(|f| format!("{} +{} -{}", f.filename, f.additions, f.deletions))
-                .collect::<Vec<_>>()
-                .join("; ");
-            parts.push(format!("files=[{}]", files));
-        }
-        if parts.is_empty() {
-            "summary".to_string()
-        } else {
-            parts.join(", ")
-        }
-    }
-
-    fn sanitize_fork_header_value(value: &str) -> String {
-        value
-            .chars()
-            .map(|c| {
-                if c == '"' {
-                    '\''
-                } else if c.is_control() {
-                    ' '
-                } else {
-                    c
-                }
-            })
-            .collect()
     }
 
     /// Populate the debug pane with history loading debug entries
@@ -8168,11 +8008,11 @@ Acknowledge that you have received this context by replying ONLY with the single
         if hidden {
             debug_payload["prompt_len"] = serde_json::json!(prompt.len());
             debug_payload["prompt_hash"] =
-                serde_json::json!(Self::compute_seed_prompt_hash(&prompt));
+                serde_json::json!(app_prompt::compute_seed_prompt_hash(&prompt));
             if let Some(ref payload) = stdin_payload {
                 debug_payload["stdin_payload_len"] = serde_json::json!(payload.len());
                 debug_payload["stdin_payload_hash"] =
-                    serde_json::json!(Self::compute_seed_prompt_hash(payload));
+                    serde_json::json!(app_prompt::compute_seed_prompt_hash(payload));
             }
         } else {
             debug_payload["prompt"] = serde_json::json!(&prompt);
@@ -8386,7 +8226,7 @@ Acknowledge that you have received this context by replying ONLY with the single
                         match self.config.steer.fallback {
                             crate::config::SteerFallback::Interrupt => {
                                 let (text, image_paths, image_placeholders) =
-                                    queued_to_submission(&queued);
+                                    app_queue::queued_to_submission(&queued);
                                 immediate_submit = Some((text, image_paths, image_placeholders));
                                 interrupt_before_submit = true;
                                 queued_handled = true;
@@ -8708,7 +8548,7 @@ Acknowledge that you have received this context by replying ONLY with the single
             .get_current_branch(&workspace.path)
             .unwrap_or_else(|_| workspace.branch.clone());
 
-        let seed_prompt = Self::build_fork_seed_prompt(session.chat_view.messages());
+        let seed_prompt = app_prompt::build_fork_seed_prompt(session.chat_view.messages());
 
         let model_id = session
             .model
@@ -8821,7 +8661,7 @@ Acknowledge that you have received this context by replying ONLY with the single
             }
         };
 
-        let seed_prompt_hash = Self::compute_seed_prompt_hash(&pending.seed_prompt);
+        let seed_prompt_hash = app_prompt::compute_seed_prompt_hash(&pending.seed_prompt);
         let fork_seed = ForkSeed::new(
             pending.agent_type,
             pending.parent_session_id.clone(),
@@ -9420,61 +9260,6 @@ Acknowledge that you have received this context by replying ONLY with the single
         )
     }
 
-    fn build_queue_lines(
-        session: &AgentSession,
-        width: u16,
-        input_mode: InputMode,
-    ) -> Option<Vec<Line<'static>>> {
-        if session.queued_messages.is_empty() {
-            return None;
-        }
-
-        let max_width = width.saturating_sub(2) as usize;
-        let selected = if input_mode == InputMode::QueueEditing {
-            session.queue_selection
-        } else {
-            None
-        };
-
-        let mut lines = Vec::new();
-        for (idx, msg) in session.queued_messages.iter().enumerate() {
-            let raw = msg.text.trim();
-            let mut preview = raw.lines().next().unwrap_or("").trim().to_string();
-            if preview.is_empty() {
-                preview = "<empty>".to_string();
-            }
-            if raw.contains('\n') {
-                preview.push_str(" ...");
-            }
-            let mut text = format!("{}: {}", msg.mode.label(), preview);
-            if !msg.images.is_empty() {
-                let count = msg.images.len();
-                let suffix = if count == 1 { "image" } else { "images" };
-                text.push_str(&format!(" [{} {}]", count, suffix));
-            }
-
-            if max_width > 0 {
-                text = truncate_queue_line(&text, max_width);
-            }
-
-            let prefix = if selected == Some(idx) { "› " } else { "  " };
-            let line_text = format!("{prefix}{text}");
-            let style = if selected == Some(idx) {
-                Style::default()
-                    .fg(text_primary())
-                    .bg(bg_highlight())
-                    .add_modifier(Modifier::ITALIC)
-            } else {
-                Style::default()
-                    .fg(text_muted())
-                    .add_modifier(Modifier::ITALIC)
-            };
-            lines.push(Line::from(Span::styled(line_text, style)));
-        }
-
-        Some(lines)
-    }
-
     fn restore_queued_to_input(&mut self, message: crate::data::QueuedMessage) {
         if let Some(session) = self.state.tab_manager.active_session_mut() {
             let attachments = message
@@ -9486,19 +9271,6 @@ Acknowledge that you have received this context by replying ONLY with the single
                 .input_box
                 .set_input_with_attachments(message.text, attachments);
             session.input_box.move_end();
-        }
-    }
-
-    fn clamp_queue_selection(session: &mut AgentSession) {
-        if session.queued_messages.is_empty() {
-            session.queue_selection = None;
-            return;
-        }
-        if let Some(idx) = session.queue_selection {
-            let max = session.queued_messages.len().saturating_sub(1);
-            if idx > max {
-                session.queue_selection = Some(max);
-            }
         }
     }
 
@@ -9566,7 +9338,7 @@ Acknowledge that you have received this context by replying ONLY with the single
 
         if let Some(message) = queued {
             self.interrupt_agent();
-            let (text, images, placeholders) = queued_to_submission(&message);
+            let (text, images, placeholders) = app_queue::queued_to_submission(&message);
             effects.extend(self.submit_prompt(text, images, placeholders)?);
         } else {
             self.state.set_timed_footer_message(
@@ -9638,7 +9410,8 @@ Acknowledge that you have received this context by replying ONLY with the single
             return Ok(effects);
         }
 
-        let (prompt, images, placeholders) = build_queued_submission(&queued, queue_delivery);
+        let (prompt, images, placeholders) =
+            app_queue::build_queued_submission(&queued, queue_delivery);
         effects.extend(self.submit_prompt_for_tab(
             tab_index,
             prompt,
@@ -10048,7 +9821,8 @@ Acknowledge that you have received this context by replying ONLY with the single
                         None
                     };
                     let input_mode = self.state.input_mode;
-                    let queue_lines = Self::build_queue_lines(session, chat_area.width, input_mode);
+                    let queue_lines =
+                        app_queue::build_queue_lines(session, chat_area.width, input_mode);
 
                     // Build prompt lines from inline_prompt (renders as part of scrollable chat)
                     let prompt_lines = session
@@ -10583,72 +10357,6 @@ Acknowledge that you have received this context by replying ONLY with the single
     }
 }
 
-fn truncate_queue_line(text: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-    let ellipsis = "...";
-    let ellipsis_width = UnicodeWidthStr::width(ellipsis);
-    let current_width = UnicodeWidthStr::width(text);
-    if current_width <= max_width {
-        return text.to_string();
-    }
-    if max_width <= ellipsis_width {
-        return ellipsis[..max_width.min(ellipsis.len())].to_string();
-    }
-    let target = max_width - ellipsis_width;
-    let mut width = 0;
-    let mut result = String::new();
-    for c in text.chars() {
-        let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
-        if width + char_width > target {
-            break;
-        }
-        result.push(c);
-        width += char_width;
-    }
-    result.push_str(ellipsis);
-    result
-}
-
-fn queued_to_submission(message: &QueuedMessage) -> (String, Vec<PathBuf>, Vec<String>) {
-    let image_paths = message.images.iter().map(|img| img.path.clone()).collect();
-    let placeholders = message
-        .images
-        .iter()
-        .map(|img| img.placeholder.clone())
-        .collect();
-    (message.text.clone(), image_paths, placeholders)
-}
-
-fn build_queued_submission(
-    messages: &[QueuedMessage],
-    delivery: crate::config::QueueDelivery,
-) -> (String, Vec<PathBuf>, Vec<String>) {
-    let mut lines = Vec::new();
-    if messages.len() == 1 || delivery == crate::config::QueueDelivery::Concat {
-        for msg in messages {
-            lines.push(msg.text.trim().to_string());
-        }
-    } else {
-        for (idx, msg) in messages.iter().enumerate() {
-            lines.push(format!("[Queued {} of {}]", idx + 1, messages.len()));
-            lines.push(msg.text.trim().to_string());
-        }
-    }
-
-    let mut image_paths = Vec::new();
-    let mut placeholders = Vec::new();
-    for msg in messages {
-        for img in &msg.images {
-            image_paths.push(img.path.clone());
-            placeholders.push(img.placeholder.clone());
-        }
-    }
-
-    (lines.join("\n\n"), image_paths, placeholders)
-}
-
 struct SessionStateSnapshot {
     tabs: Vec<SessionTab>,
     active_tab_index: usize,
@@ -10834,48 +10542,12 @@ async fn generate_title_and_branch_impl(
     };
 
     Ok(TitleGeneratedResult {
-        title: sanitize_title(&metadata.title),
+        title: app_prompt::sanitize_title(&metadata.title),
         new_branch,
         workspace_id,
         tool_used: metadata.tool_used.clone(),
         used_fallback: metadata.used_fallback,
     })
-}
-
-/// Sanitize a generated title: trim whitespace, remove control characters and newlines,
-/// enforce max length, and provide fallback for empty titles.
-fn sanitize_title(title: &str) -> String {
-    const MAX_TITLE_LENGTH: usize = 200;
-    const FALLBACK_TITLE: &str = "Untitled task";
-
-    // Collapse all whitespace (including newlines) to single spaces and trim
-    let sanitized: String = title
-        .chars()
-        .map(|c| {
-            if c.is_whitespace() || c.is_control() {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    // Enforce max length
-    let truncated = if sanitized.chars().count() > MAX_TITLE_LENGTH {
-        sanitized.chars().take(MAX_TITLE_LENGTH).collect()
-    } else {
-        sanitized
-    };
-
-    // Fallback for empty titles
-    if truncated.is_empty() {
-        FALLBACK_TITLE.to_string()
-    } else {
-        truncated
-    }
 }
 
 #[cfg(test)]
@@ -10921,43 +10593,15 @@ mod tests {
         }
     }
 
-    /// Helper to check if a colon keypress should trigger command mode.
-    /// This mirrors the logic in handle_key_event (lines 572-601).
-    fn should_trigger_command_mode(
-        key_code: KeyCode,
-        key_modifiers: KeyModifiers,
-        input_mode: InputMode,
-        input_box_content: &str,
-        shell_mode: bool,
-    ) -> bool {
-        key_code == KeyCode::Char(':')
-            && key_modifiers.is_empty()
-            && input_box_content.is_empty() // Only trigger when input is empty
-            && !shell_mode
-            && !matches!(
-                input_mode,
-                InputMode::Command
-                    | InputMode::ShowingHelp
-                    | InputMode::AddingRepository
-                    | InputMode::SettingBaseDir
-                    | InputMode::PickingProject
-                    | InputMode::ShowingError
-                    | InputMode::SelectingAgent
-                    | InputMode::Confirming
-                    | InputMode::ImportingSession
-                    | InputMode::CommandPalette
-                    | InputMode::SelectingTheme
-            )
-    }
-
     #[test]
     fn test_colon_triggers_command_mode_on_empty_input() {
         // Typing ":" on empty input SHOULD trigger command mode
-        let result = should_trigger_command_mode(
+        let result = App::should_trigger_command_mode(
             KeyCode::Char(':'),
             KeyModifiers::NONE,
             InputMode::Normal,
-            "", // empty input
+            true, // input_is_empty
+            false,
             false,
         );
         assert!(result, "Colon should trigger command mode on empty input");
@@ -10966,11 +10610,12 @@ mod tests {
     #[test]
     fn test_colon_with_modifiers_does_not_trigger_command_mode() {
         // Typing "Shift+:" should NOT trigger command mode
-        let result = should_trigger_command_mode(
+        let result = App::should_trigger_command_mode(
             KeyCode::Char(':'),
             KeyModifiers::SHIFT,
             InputMode::Normal,
-            "",
+            true,
+            false,
             false,
         );
         assert!(
@@ -10986,11 +10631,12 @@ mod tests {
     fn test_colon_does_not_trigger_command_mode_with_existing_input() {
         // Simulate: user has typed "hello" and now types ":"
         // ":" should be inserted as a regular character, not trigger command mode
-        let result = should_trigger_command_mode(
+        let result = App::should_trigger_command_mode(
             KeyCode::Char(':'),
             KeyModifiers::NONE,
             InputMode::Normal,
-            "hello", // input already has content
+            false, // input already has content
+            false,
             false,
         );
 
@@ -11005,17 +10651,35 @@ mod tests {
     fn test_paste_url_with_port_does_not_trigger_command_mode() {
         // Simulate: user pastes "localhost:8080"
         // After pasting "localhost", the ":" should be inserted, not trigger command mode
-        let result = should_trigger_command_mode(
+        let result = App::should_trigger_command_mode(
             KeyCode::Char(':'),
             KeyModifiers::NONE,
             InputMode::Normal,
-            "localhost", // input has content from paste
+            false, // input has content from paste
+            false,
             false,
         );
 
         assert!(
             !result,
             "Pasting 'localhost:8080' should not trigger command mode at ':'"
+        );
+    }
+
+    #[test]
+    fn test_colon_does_not_trigger_in_selecting_model() {
+        let result = App::should_trigger_command_mode(
+            KeyCode::Char(':'),
+            KeyModifiers::NONE,
+            InputMode::SelectingModel,
+            true,
+            false,
+            false,
+        );
+
+        assert!(
+            !result,
+            "Colon should NOT trigger command mode while selecting a model"
         );
     }
 
@@ -11035,7 +10699,7 @@ mod tests {
             ChatMessage::turn_summary(summary),
         ];
 
-        let prompt = App::build_fork_seed_prompt(&messages);
+        let prompt = app_prompt::build_fork_seed_prompt(&messages);
 
         // Check header and structure
         assert!(prompt.contains("[CONDUIT_FORK_SEED]"));
@@ -11054,6 +10718,97 @@ mod tests {
         assert!(prompt.contains("[role=summary]"));
         assert!(prompt.contains("tokens_in=100"));
         assert!(prompt.contains("tokens_out=200"));
+    }
+
+    #[test]
+    fn test_build_fork_seed_prompt_truncates_large_transcript() {
+        use crate::ui::components::ChatMessage;
+
+        let oversized = "a".repeat(app_prompt::MAX_SEED_PROMPT_SIZE + 10_000);
+        let messages = vec![ChatMessage::user(oversized)];
+
+        let prompt = app_prompt::build_fork_seed_prompt(&messages);
+
+        assert!(
+            prompt.contains("[TRUNCATED: transcript exceeded size limit]"),
+            "Expected truncation marker"
+        );
+        assert!(prompt.contains("[END OF CONTEXT]"));
+        assert!(prompt.ends_with("Ready"));
+    }
+
+    #[test]
+    fn test_strip_image_placeholders_removes_placeholders() {
+        let prompt = "Hello [img] world".to_string();
+        let placeholders = vec!["[img]".to_string()];
+
+        let cleaned = App::strip_image_placeholders(prompt, &placeholders);
+
+        assert_eq!(cleaned, "Hello  world");
+    }
+
+    #[test]
+    fn test_append_image_paths_to_prompt_appends_list() {
+        let prompt = "Test".to_string();
+        let images = vec![PathBuf::from("a.png"), PathBuf::from("b.png")];
+
+        let combined = App::append_image_paths_to_prompt(prompt, &images);
+
+        assert_eq!(combined, "Test\nImage file(s):\n- a.png\n- b.png");
+    }
+
+    #[test]
+    fn test_truncate_queue_line_handles_small_widths() {
+        assert_eq!(app_queue::truncate_queue_line("abcdef", 4), "a...");
+        assert_eq!(app_queue::truncate_queue_line("abcdef", 3), "...");
+        assert_eq!(app_queue::truncate_queue_line("abcdef", 2), "..");
+        assert_eq!(app_queue::truncate_queue_line("abcdef", 0), "");
+    }
+
+    #[test]
+    fn test_build_queued_submission_concat_vs_separate() {
+        let msg_a = QueuedMessage {
+            id: Uuid::new_v4(),
+            mode: QueuedMessageMode::FollowUp,
+            text: "First".to_string(),
+            images: Vec::new(),
+            created_at: Utc::now(),
+        };
+        let msg_b = QueuedMessage {
+            id: Uuid::new_v4(),
+            mode: QueuedMessageMode::Steer,
+            text: "Second".to_string(),
+            images: Vec::new(),
+            created_at: Utc::now(),
+        };
+
+        let (concat, _, _) = app_queue::build_queued_submission(
+            &[msg_a.clone(), msg_b.clone()],
+            crate::config::QueueDelivery::Concat,
+        );
+        let (separate, _, _) = app_queue::build_queued_submission(
+            &[msg_a.clone(), msg_b.clone()],
+            crate::config::QueueDelivery::Separate,
+        );
+
+        assert_eq!(concat, "First\n\nSecond");
+        assert!(separate.contains("[Queued 1 of 2]"));
+        assert!(separate.contains("[Queued 2 of 2]"));
+    }
+
+    #[test]
+    fn test_sanitize_title_collapses_whitespace_and_bounds_length() {
+        let title = "  Hello\n\tworld  ".to_string();
+        let cleaned = app_prompt::sanitize_title(&title);
+        assert_eq!(cleaned, "Hello world");
+
+        let long = "a".repeat(250);
+        let bounded = app_prompt::sanitize_title(&long);
+        assert!(bounded.chars().count() <= 200);
+
+        let empty = "\n\t\r".to_string();
+        let fallback = app_prompt::sanitize_title(&empty);
+        assert_eq!(fallback, "Untitled task");
     }
 
     #[tokio::test]
