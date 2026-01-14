@@ -978,7 +978,7 @@ fn find_section_blocks<'a>(body: &'a str, label: &str) -> Vec<&'a str> {
     blocks
 }
 
-fn extract_details_block<'a>(body: &'a str, start: usize) -> Option<(&'a str, usize)> {
+fn extract_details_block(body: &str, start: usize) -> Option<(&str, usize)> {
     let mut idx = start;
     let mut depth = 0i64;
     while idx < body.len() {
