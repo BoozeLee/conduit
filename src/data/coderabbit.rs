@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use super::models::{
-    CodeRabbitCategory, CodeRabbitItem, CodeRabbitItemSource, CodeRabbitMode, CodeRabbitRetention,
-    CodeRabbitRound, CodeRabbitRoundStatus, CodeRabbitSeverity, RepositorySettings,
+    CodeRabbitCategory, CodeRabbitComment, CodeRabbitFeedbackScope, CodeRabbitItem,
+    CodeRabbitItemKind, CodeRabbitItemSource, CodeRabbitMode, CodeRabbitRetention, CodeRabbitRound,
+    CodeRabbitRoundStatus, CodeRabbitSeverity, RepositorySettings,
 };
 
 const DEFAULT_BACKOFF_SECONDS: &[i64] = &[30, 120, 300];
@@ -63,7 +64,8 @@ impl RepositorySettingsStore {
     ) -> SqliteResult<Option<RepositorySettings>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT repository_id, coderabbit_mode, coderabbit_retention, coderabbit_backoff_seconds, updated_at
+            "SELECT repository_id, coderabbit_mode, coderabbit_retention, coderabbit_scope,
+                    coderabbit_backoff_seconds, updated_at
              FROM repository_settings WHERE repository_id = ?1",
         )?;
         let mut rows = stmt.query(params![repository_id.to_string()])?;
@@ -86,17 +88,21 @@ impl RepositorySettingsStore {
         let conn = self.conn.lock().unwrap();
         let updated_at = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO repository_settings (repository_id, coderabbit_mode, coderabbit_retention, coderabbit_backoff_seconds, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO repository_settings (
+                repository_id, coderabbit_mode, coderabbit_retention, coderabbit_scope,
+                coderabbit_backoff_seconds, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(repository_id) DO UPDATE SET
                  coderabbit_mode = excluded.coderabbit_mode,
                  coderabbit_retention = excluded.coderabbit_retention,
+                 coderabbit_scope = excluded.coderabbit_scope,
                  coderabbit_backoff_seconds = excluded.coderabbit_backoff_seconds,
                  updated_at = excluded.updated_at",
             params![
                 settings.repository_id.to_string(),
                 settings.coderabbit_mode.as_str(),
                 settings.coderabbit_retention.as_str(),
+                settings.coderabbit_scope.as_str(),
                 backoff_to_string(&settings.coderabbit_backoff_seconds),
                 updated_at,
             ],
@@ -109,6 +115,7 @@ impl RepositorySettingsStore {
             repository_id,
             coderabbit_mode: CodeRabbitMode::Auto,
             coderabbit_retention: CodeRabbitRetention::Keep,
+            coderabbit_scope: CodeRabbitFeedbackScope::All,
             coderabbit_backoff_seconds: DEFAULT_BACKOFF_SECONDS.to_vec(),
             updated_at: Utc::now(),
         }
@@ -118,13 +125,15 @@ impl RepositorySettingsStore {
         let repo_id: String = row.get(0)?;
         let mode: String = row.get(1)?;
         let retention: String = row.get(2)?;
-        let backoff_raw: String = row.get(3)?;
-        let updated_at_str: String = row.get(4)?;
+        let scope: String = row.get(3)?;
+        let backoff_raw: String = row.get(4)?;
+        let updated_at_str: String = row.get(5)?;
 
         Ok(RepositorySettings {
             repository_id: Uuid::parse_str(&repo_id).unwrap_or_else(|_| Uuid::new_v4()),
             coderabbit_mode: CodeRabbitMode::parse(&mode),
             coderabbit_retention: CodeRabbitRetention::parse(&retention),
+            coderabbit_scope: CodeRabbitFeedbackScope::parse(&scope),
             coderabbit_backoff_seconds: parse_backoff_seconds(&backoff_raw),
             updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -148,9 +157,9 @@ impl CodeRabbitRoundStore {
         conn.execute(
             "INSERT INTO coderabbit_rounds (
                 id, repository_id, workspace_id, pr_number, head_sha, check_state, check_started_at,
-                observed_at, status, attempt_count, next_fetch_at, actionable_count, completed_at,
-                created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                observed_at, status, attempt_count, next_fetch_at, actionable_count, total_count,
+                completed_at, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 round.id.to_string(),
                 round.repository_id.to_string(),
@@ -164,6 +173,7 @@ impl CodeRabbitRoundStore {
                 round.attempt_count,
                 round.next_fetch_at.map(|dt| dt.to_rfc3339()),
                 round.actionable_count,
+                round.total_count,
                 round.completed_at.map(|dt| dt.to_rfc3339()),
                 round.created_at.to_rfc3339(),
                 round.updated_at.to_rfc3339(),
@@ -182,8 +192,8 @@ impl CodeRabbitRoundStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, repository_id, workspace_id, pr_number, head_sha, check_state, check_started_at,
-                    observed_at, status, attempt_count, next_fetch_at, actionable_count, completed_at,
-                    created_at, updated_at
+                    observed_at, status, attempt_count, next_fetch_at, actionable_count, total_count,
+                    completed_at, created_at, updated_at
              FROM coderabbit_rounds
              WHERE repository_id = ?1 AND pr_number = ?2 AND head_sha = ?3 AND check_started_at = ?4",
         )?;
@@ -209,8 +219,8 @@ impl CodeRabbitRoundStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, repository_id, workspace_id, pr_number, head_sha, check_state, check_started_at,
-                    observed_at, status, attempt_count, next_fetch_at, actionable_count, completed_at,
-                    created_at, updated_at
+                    observed_at, status, attempt_count, next_fetch_at, actionable_count, total_count,
+                    completed_at, created_at, updated_at
              FROM coderabbit_rounds
              WHERE repository_id = ?1 AND pr_number = ?2 AND head_sha = ?3
              ORDER BY check_started_at DESC
@@ -228,8 +238,8 @@ impl CodeRabbitRoundStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, repository_id, workspace_id, pr_number, head_sha, check_state, check_started_at,
-                    observed_at, status, attempt_count, next_fetch_at, actionable_count, completed_at,
-                    created_at, updated_at
+                    observed_at, status, attempt_count, next_fetch_at, actionable_count, total_count,
+                    completed_at, created_at, updated_at
              FROM coderabbit_rounds
              WHERE status = 'pending'
                AND next_fetch_at IS NOT NULL
@@ -252,8 +262,9 @@ impl CodeRabbitRoundStore {
                 attempt_count = ?4,
                 next_fetch_at = ?5,
                 actionable_count = ?6,
-                completed_at = ?7,
-                updated_at = ?8
+                total_count = ?7,
+                completed_at = ?8,
+                updated_at = ?9
              WHERE id = ?1",
             params![
                 round.id.to_string(),
@@ -262,6 +273,7 @@ impl CodeRabbitRoundStore {
                 round.attempt_count,
                 round.next_fetch_at.map(|dt| dt.to_rfc3339()),
                 round.actionable_count,
+                round.total_count,
                 round.completed_at.map(|dt| dt.to_rfc3339()),
                 round.updated_at.to_rfc3339(),
             ],
@@ -286,9 +298,9 @@ impl CodeRabbitRoundStore {
         let observed_at_str: String = row.get(7)?;
         let status_str: String = row.get(8)?;
         let next_fetch_at_str: Option<String> = row.get(10)?;
-        let completed_at_str: Option<String> = row.get(12)?;
-        let created_at_str: String = row.get(13)?;
-        let updated_at_str: String = row.get(14)?;
+        let completed_at_str: Option<String> = row.get(13)?;
+        let created_at_str: String = row.get(14)?;
+        let updated_at_str: String = row.get(15)?;
 
         Ok(CodeRabbitRound {
             id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
@@ -309,6 +321,7 @@ impl CodeRabbitRoundStore {
                 .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
             actionable_count: row.get(11)?,
+            total_count: row.get(12)?,
             completed_at: completed_at_str
                 .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
@@ -319,6 +332,43 @@ impl CodeRabbitRoundStore {
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct CodeRabbitCommentStore {
+    conn: Arc<Mutex<Connection>>,
+}
+
+impl CodeRabbitCommentStore {
+    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
+        Self { conn }
+    }
+
+    pub fn insert_comments(&self, comments: &[CodeRabbitComment]) -> SqliteResult<usize> {
+        let conn = self.conn.lock().unwrap();
+        let mut inserted = 0usize;
+        for comment in comments {
+            let rows = conn.execute(
+                "INSERT OR IGNORE INTO coderabbit_comments (
+                    id, round_id, comment_id, source, html_url, body, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    comment.id.to_string(),
+                    comment.round_id.to_string(),
+                    comment.comment_id,
+                    comment.source.as_str(),
+                    comment.html_url,
+                    comment.body,
+                    comment.created_at.to_rfc3339(),
+                    comment.updated_at.to_rfc3339(),
+                ],
+            )?;
+            if rows > 0 {
+                inserted += 1;
+            }
+        }
+        Ok(inserted)
     }
 }
 
@@ -338,23 +388,31 @@ impl CodeRabbitItemStore {
         for item in items {
             let rows = conn.execute(
                 "INSERT OR IGNORE INTO coderabbit_items (
-                    id, round_id, comment_id, source, category, severity, file_path, line,
-                    original_line, diff_hunk, html_url, body, agent_prompt, created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    id, round_id, comment_id, source, kind, actionable, category, severity, section,
+                    file_path, line, line_start, line_end, original_line, diff_hunk, html_url,
+                    body, agent_prompt, item_key, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                           ?17, ?18, ?19, ?20, ?21)",
                 params![
                     item.id.to_string(),
                     item.round_id.to_string(),
                     item.comment_id,
                     item.source.as_str(),
-                    item.category.as_str(),
+                    item.kind.as_str(),
+                    if item.actionable { 1 } else { 0 },
+                    item.category.map(|category| category.as_str()),
                     item.severity.map(|severity| severity.as_str()),
+                    item.section,
                     item.file_path,
                     item.line,
+                    item.line_start,
+                    item.line_end,
                     item.original_line,
                     item.diff_hunk,
                     item.html_url,
                     item.body,
                     item.agent_prompt,
+                    item.item_key,
                     item.created_at.to_rfc3339(),
                     item.updated_at.to_rfc3339(),
                 ],
@@ -375,11 +433,23 @@ impl CodeRabbitItemStore {
         )?;
         Ok(count)
     }
+
+    pub fn count_actionable_for_round(&self, round_id: Uuid) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM coderabbit_items WHERE round_id = ?1 AND actionable = 1",
+            params![round_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
 }
 
 #[allow(dead_code)]
 fn _assert_enum_strs() {
     let _ = CodeRabbitCategory::PotentialIssue.as_str();
+    let _ = CodeRabbitFeedbackScope::All.as_str();
+    let _ = CodeRabbitItemKind::Actionable.as_str();
     let _ = CodeRabbitItemSource::ReviewComment.as_str();
     let _ = CodeRabbitRoundStatus::Pending.as_str();
     let _ = CodeRabbitSeverity::Critical.as_str();

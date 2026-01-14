@@ -281,11 +281,43 @@ impl std::str::FromStr for CodeRabbitRetention {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeRabbitFeedbackScope {
+    ActionableOnly,
+    All,
+}
+
+impl CodeRabbitFeedbackScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeRabbitFeedbackScope::ActionableOnly => "actionable-only",
+            CodeRabbitFeedbackScope::All => "all",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "actionable-only" => CodeRabbitFeedbackScope::ActionableOnly,
+            _ => CodeRabbitFeedbackScope::All,
+        }
+    }
+}
+
+impl std::str::FromStr for CodeRabbitFeedbackScope {
+    type Err = std::convert::Infallible;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(CodeRabbitFeedbackScope::parse(value))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RepositorySettings {
     pub repository_id: Uuid,
     pub coderabbit_mode: CodeRabbitMode,
     pub coderabbit_retention: CodeRabbitRetention,
+    pub coderabbit_scope: CodeRabbitFeedbackScope,
     pub coderabbit_backoff_seconds: Vec<i64>,
     pub updated_at: DateTime<Utc>,
 }
@@ -352,6 +384,40 @@ impl std::str::FromStr for CodeRabbitItemSource {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Ok(CodeRabbitItemSource::parse(value))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeRabbitItemKind {
+    Actionable,
+    Nitpick,
+    OutsideDiff,
+}
+
+impl CodeRabbitItemKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeRabbitItemKind::Actionable => "actionable",
+            CodeRabbitItemKind::Nitpick => "nitpick",
+            CodeRabbitItemKind::OutsideDiff => "outside-diff",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "nitpick" => CodeRabbitItemKind::Nitpick,
+            "outside-diff" => CodeRabbitItemKind::OutsideDiff,
+            _ => CodeRabbitItemKind::Actionable,
+        }
+    }
+}
+
+impl std::str::FromStr for CodeRabbitItemKind {
+    type Err = std::convert::Infallible;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(CodeRabbitItemKind::parse(value))
     }
 }
 
@@ -442,6 +508,7 @@ pub struct CodeRabbitRound {
     pub attempt_count: i64,
     pub next_fetch_at: Option<DateTime<Utc>>,
     pub actionable_count: i64,
+    pub total_count: i64,
     pub completed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -471,6 +538,7 @@ impl CodeRabbitRound {
             attempt_count: 0,
             next_fetch_at: Some(observed_at),
             actionable_count: 0,
+            total_count: 0,
             completed_at: None,
             created_at: now,
             updated_at: now,
@@ -479,20 +547,38 @@ impl CodeRabbitRound {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeRabbitComment {
+    pub id: Uuid,
+    pub round_id: Uuid,
+    pub comment_id: i64,
+    pub source: CodeRabbitItemSource,
+    pub html_url: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CodeRabbitItem {
     pub id: Uuid,
     pub round_id: Uuid,
     pub comment_id: i64,
     pub source: CodeRabbitItemSource,
-    pub category: CodeRabbitCategory,
+    pub kind: CodeRabbitItemKind,
+    pub actionable: bool,
+    pub category: Option<CodeRabbitCategory>,
     pub severity: Option<CodeRabbitSeverity>,
+    pub section: Option<String>,
     pub file_path: Option<String>,
     pub line: Option<i64>,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
     pub original_line: Option<i64>,
     pub diff_hunk: Option<String>,
     pub html_url: String,
     pub body: String,
     pub agent_prompt: Option<String>,
+    pub item_key: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

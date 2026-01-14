@@ -2,13 +2,15 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use uuid::Uuid;
 
 use crate::data::{
-    CodeRabbitCategory, CodeRabbitItem, CodeRabbitItemSource, CodeRabbitItemStore, CodeRabbitMode,
+    CodeRabbitCategory, CodeRabbitComment, CodeRabbitCommentStore, CodeRabbitFeedbackScope,
+    CodeRabbitItem, CodeRabbitItemKind, CodeRabbitItemSource, CodeRabbitItemStore, CodeRabbitMode,
     CodeRabbitRound, CodeRabbitRoundStatus, CodeRabbitRoundStore, CodeRabbitSeverity,
     RepositorySettings, RepositorySettingsStore, RepositoryStore, WorkspaceStore,
 };
@@ -140,19 +142,36 @@ fn check_state_from_status(check: &PrStatusCheck) -> CodeRabbitCheckState {
 }
 
 #[derive(Debug, Clone)]
+pub struct CodeRabbitCommentDraft {
+    pub comment_id: i64,
+    pub commit_id: Option<String>,
+    pub source: CodeRabbitItemSource,
+    pub html_url: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CodeRabbitItemDraft {
     pub comment_id: i64,
     pub commit_id: Option<String>,
     pub source: CodeRabbitItemSource,
-    pub category: CodeRabbitCategory,
+    pub kind: CodeRabbitItemKind,
+    pub actionable: bool,
+    pub category: Option<CodeRabbitCategory>,
     pub severity: Option<CodeRabbitSeverity>,
+    pub section: Option<String>,
     pub file_path: Option<String>,
     pub line: Option<i64>,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
     pub original_line: Option<i64>,
     pub diff_hunk: Option<String>,
     pub html_url: String,
     pub body: String,
     pub agent_prompt: Option<String>,
+    pub item_key: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -163,6 +182,7 @@ pub struct CodeRabbitProcessor {
     workspace_store: WorkspaceStore,
     settings_store: RepositorySettingsStore,
     round_store: CodeRabbitRoundStore,
+    comment_store: CodeRabbitCommentStore,
     item_store: CodeRabbitItemStore,
 }
 
@@ -172,6 +192,7 @@ impl CodeRabbitProcessor {
         workspace_store: WorkspaceStore,
         settings_store: RepositorySettingsStore,
         round_store: CodeRabbitRoundStore,
+        comment_store: CodeRabbitCommentStore,
         item_store: CodeRabbitItemStore,
     ) -> Self {
         Self {
@@ -179,6 +200,7 @@ impl CodeRabbitProcessor {
             workspace_store,
             settings_store,
             round_store,
+            comment_store,
             item_store,
         }
     }
@@ -324,58 +346,106 @@ impl CodeRabbitProcessor {
     ) -> Result<()> {
         let observed_at = Utc::now();
         let fetcher = CodeRabbitFetcher::new(working_dir.to_path_buf());
-        let drafts = match fetcher.fetch_actionable_items(round.pr_number as u32, observed_at) {
-            Ok(items) => items,
+        let fetched = match fetcher.fetch_feedback(round.pr_number as u32, observed_at) {
+            Ok(result) => result,
             Err(error) => {
                 tracing::warn!(
                     round_id = %round.id,
                     error = %error,
                     "CodeRabbit fetch failed"
                 );
-                Vec::new()
+                CodeRabbitFetchResult::default()
             }
         };
 
         let window_end = observed_at + Duration::minutes(CODERABBIT_WINDOW_SLACK_MINUTES);
-        let mut current_round_drafts = Vec::new();
-        let mut foreign_by_commit: HashMap<String, Vec<CodeRabbitItemDraft>> = HashMap::new();
+        let mut current_comment_drafts = Vec::new();
+        let mut foreign_comments_by_commit: HashMap<String, Vec<CodeRabbitCommentDraft>> =
+            HashMap::new();
 
-        for draft in drafts {
+        for draft in fetched.comments {
             match draft.commit_id.as_deref() {
                 Some(commit_id) if commit_id.eq_ignore_ascii_case(&round.head_sha) => {
-                    current_round_drafts.push(draft);
+                    current_comment_drafts.push(draft);
                 }
                 Some(commit_id) => {
-                    foreign_by_commit
+                    foreign_comments_by_commit
                         .entry(commit_id.to_string())
                         .or_default()
                         .push(draft);
                 }
                 None => {
                     if within_window(draft.created_at, Some(round.check_started_at), window_end) {
-                        current_round_drafts.push(draft);
+                        current_comment_drafts.push(draft);
                     }
                 }
             }
         }
 
-        let to_insert = build_items(round.id, &current_round_drafts);
-        if !to_insert.is_empty() {
+        let mut current_item_drafts = Vec::new();
+        let mut foreign_items_by_commit: HashMap<String, Vec<CodeRabbitItemDraft>> = HashMap::new();
+
+        for draft in fetched.items {
+            match draft.commit_id.as_deref() {
+                Some(commit_id) if commit_id.eq_ignore_ascii_case(&round.head_sha) => {
+                    current_item_drafts.push(draft);
+                }
+                Some(commit_id) => {
+                    foreign_items_by_commit
+                        .entry(commit_id.to_string())
+                        .or_default()
+                        .push(draft);
+                }
+                None => {
+                    if within_window(draft.created_at, Some(round.check_started_at), window_end) {
+                        current_item_drafts.push(draft);
+                    }
+                }
+            }
+        }
+
+        let scope = settings.coderabbit_scope;
+        if scope == CodeRabbitFeedbackScope::ActionableOnly {
+            current_item_drafts.retain(|draft| draft.actionable);
+            for drafts in foreign_items_by_commit.values_mut() {
+                drafts.retain(|draft| draft.actionable);
+            }
+            foreign_items_by_commit.retain(|_, drafts| !drafts.is_empty());
+            current_comment_drafts.clear();
+            foreign_comments_by_commit.clear();
+        }
+
+        if scope == CodeRabbitFeedbackScope::All {
+            let comments_to_insert = build_comments(round.id, &current_comment_drafts);
+            if !comments_to_insert.is_empty() {
+                self.comment_store
+                    .insert_comments(&comments_to_insert)
+                    .context("Insert CodeRabbit comments")?;
+            }
+        }
+
+        let items_to_insert = build_items(round.id, &current_item_drafts);
+        if !items_to_insert.is_empty() {
             self.item_store
-                .insert_items(&to_insert)
+                .insert_items(&items_to_insert)
                 .context("Insert CodeRabbit items")?;
         }
 
-        let total_actionable = self
+        let total_count = self
             .item_store
             .count_for_round(round.id)
             .context("Count CodeRabbit items for round")?;
+        let actionable_count = self
+            .item_store
+            .count_actionable_for_round(round.id)
+            .context("Count actionable CodeRabbit items for round")?;
 
         round.attempt_count += 1;
-        round.actionable_count = total_actionable;
+        round.total_count = total_count;
+        round.actionable_count = actionable_count;
         round.updated_at = observed_at;
 
-        if total_actionable > 0 {
+        if total_count > 0 {
             round.status = CodeRabbitRoundStatus::Complete;
             round.completed_at = Some(observed_at);
             round.next_fetch_at = None;
@@ -395,17 +465,54 @@ impl CodeRabbitProcessor {
             .update(&round)
             .context("Update CodeRabbit round after fetch")?;
 
-        self.capture_foreign_rounds(&round, foreign_by_commit, observed_at)
+        self.capture_foreign_rounds(
+            &round,
+            foreign_comments_by_commit,
+            foreign_items_by_commit,
+            observed_at,
+            scope,
+        )
     }
 
     fn capture_foreign_rounds(
         &self,
         base_round: &CodeRabbitRound,
-        foreign_by_commit: HashMap<String, Vec<CodeRabbitItemDraft>>,
+        foreign_comments_by_commit: HashMap<String, Vec<CodeRabbitCommentDraft>>,
+        foreign_items_by_commit: HashMap<String, Vec<CodeRabbitItemDraft>>,
         observed_at: DateTime<Utc>,
+        scope: CodeRabbitFeedbackScope,
     ) -> Result<()> {
-        for (commit_id, drafts) in foreign_by_commit {
-            self.capture_round_for_commit(base_round, &commit_id, &drafts, observed_at)?;
+        let mut grouped: HashMap<String, (Vec<CodeRabbitCommentDraft>, Vec<CodeRabbitItemDraft>)> =
+            HashMap::new();
+
+        for (commit_id, drafts) in foreign_comments_by_commit {
+            grouped
+                .entry(commit_id)
+                .or_insert_with(|| (Vec::new(), Vec::new()))
+                .0
+                .extend(drafts);
+        }
+
+        for (commit_id, drafts) in foreign_items_by_commit {
+            grouped
+                .entry(commit_id)
+                .or_insert_with(|| (Vec::new(), Vec::new()))
+                .1
+                .extend(drafts);
+        }
+
+        for (commit_id, (comment_drafts, item_drafts)) in grouped {
+            if comment_drafts.is_empty() && item_drafts.is_empty() {
+                continue;
+            }
+            self.capture_round_for_commit(
+                base_round,
+                &commit_id,
+                &comment_drafts,
+                &item_drafts,
+                observed_at,
+                scope,
+            )?;
         }
         Ok(())
     }
@@ -414,9 +521,14 @@ impl CodeRabbitProcessor {
         &self,
         base_round: &CodeRabbitRound,
         commit_id: &str,
-        drafts: &[CodeRabbitItemDraft],
+        comment_drafts: &[CodeRabbitCommentDraft],
+        item_drafts: &[CodeRabbitItemDraft],
         observed_at: DateTime<Utc>,
+        scope: CodeRabbitFeedbackScope,
     ) -> Result<()> {
+        if comment_drafts.is_empty() && item_drafts.is_empty() {
+            return Ok(());
+        }
         let existing = self
             .round_store
             .get_latest_for_head(base_round.repository_id, base_round.pr_number, commit_id)
@@ -425,9 +537,10 @@ impl CodeRabbitProcessor {
         let mut round = if let Some(round) = existing {
             round
         } else {
-            let check_started_at = drafts
+            let check_started_at = comment_drafts
                 .iter()
                 .map(|draft| draft.created_at)
+                .chain(item_drafts.iter().map(|draft| draft.created_at))
                 .min()
                 .unwrap_or(observed_at);
             let round = CodeRabbitRound::new(
@@ -445,30 +558,50 @@ impl CodeRabbitProcessor {
             round
         };
 
-        let to_insert = build_items(round.id, drafts);
-        if !to_insert.is_empty() {
+        if scope == CodeRabbitFeedbackScope::All {
+            let comments_to_insert = build_comments(round.id, comment_drafts);
+            if !comments_to_insert.is_empty() {
+                self.comment_store
+                    .insert_comments(&comments_to_insert)
+                    .context("Insert CodeRabbit comments for prior commit")?;
+            }
+        }
+
+        let items_to_insert = build_items(round.id, item_drafts);
+        if !items_to_insert.is_empty() {
             self.item_store
-                .insert_items(&to_insert)
+                .insert_items(&items_to_insert)
                 .context("Insert CodeRabbit items for prior commit")?;
         }
 
-        let total_actionable = self
+        let total_count = self
             .item_store
             .count_for_round(round.id)
             .context("Count CodeRabbit items for prior commit")?;
+        let actionable_count = self
+            .item_store
+            .count_actionable_for_round(round.id)
+            .context("Count actionable CodeRabbit items for prior commit")?;
 
-        if total_actionable > 0 && round.status != CodeRabbitRoundStatus::Complete {
+        if total_count > 0 && round.status != CodeRabbitRoundStatus::Complete {
             round.status = CodeRabbitRoundStatus::Complete;
             round.completed_at = Some(observed_at);
             round.next_fetch_at = None;
         }
-        round.actionable_count = total_actionable;
+        round.total_count = total_count;
+        round.actionable_count = actionable_count;
         round.updated_at = observed_at;
         self.round_store
             .update(&round)
             .context("Update CodeRabbit round for prior commit")?;
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct CodeRabbitFetchResult {
+    comments: Vec<CodeRabbitCommentDraft>,
+    items: Vec<CodeRabbitItemDraft>,
 }
 
 struct CodeRabbitFetcher {
@@ -480,11 +613,11 @@ impl CodeRabbitFetcher {
         Self { working_dir }
     }
 
-    fn fetch_actionable_items(
+    fn fetch_feedback(
         &self,
         pr_number: u32,
         observed_at: DateTime<Utc>,
-    ) -> Result<Vec<CodeRabbitItemDraft>> {
+    ) -> Result<CodeRabbitFetchResult> {
         let review_comments: Vec<GitHubReviewComment> = gh_api_paginated(
             &self.working_dir,
             &format!(
@@ -512,28 +645,50 @@ impl CodeRabbitFetcher {
         )
         .context("Fetch CodeRabbit reviews")?;
 
-        let mut drafts = Vec::new();
+        let mut comments = Vec::new();
+        let mut items = Vec::new();
 
         for comment in review_comments {
             if !is_coderabbit_login(&comment.user.login) {
                 continue;
             }
-            if let Some((category, severity)) = parse_actionable(&comment.body) {
-                let created_at = parse_timestamp(Some(&comment.created_at)).unwrap_or(observed_at);
-                let updated_at = parse_timestamp(Some(&comment.updated_at)).unwrap_or(created_at);
-                drafts.push(CodeRabbitItemDraft {
+            let created_at = parse_timestamp(Some(&comment.created_at)).unwrap_or(observed_at);
+            let updated_at = parse_timestamp(Some(&comment.updated_at)).unwrap_or(created_at);
+            let body = sanitize_comment_body(&comment.body);
+            comments.push(CodeRabbitCommentDraft {
+                comment_id: comment.id,
+                commit_id: comment.commit_id.clone(),
+                source: CodeRabbitItemSource::ReviewComment,
+                html_url: comment.html_url.clone(),
+                body: body.clone(),
+                created_at,
+                updated_at,
+            });
+
+            if let Some((category, severity)) = parse_actionable(&body) {
+                let line_start = comment.line.or(comment.original_line);
+                items.push(CodeRabbitItemDraft {
                     comment_id: comment.id,
                     commit_id: comment.commit_id.clone(),
                     source: CodeRabbitItemSource::ReviewComment,
-                    category,
+                    kind: CodeRabbitItemKind::Actionable,
+                    actionable: true,
+                    category: Some(category),
                     severity,
-                    file_path: comment.path,
+                    section: None,
+                    file_path: comment.path.clone(),
                     line: comment.line,
+                    line_start,
+                    line_end: line_start,
                     original_line: comment.original_line,
-                    diff_hunk: comment.diff_hunk,
-                    html_url: comment.html_url,
-                    body: comment.body.clone(),
-                    agent_prompt: extract_prompt_for_ai_agents(&comment.body),
+                    diff_hunk: comment.diff_hunk.clone(),
+                    html_url: comment.html_url.clone(),
+                    body: body.clone(),
+                    agent_prompt: extract_prompt_for_ai_agents(&body),
+                    item_key: item_key_for_inline_comment(
+                        CodeRabbitItemSource::ReviewComment,
+                        comment.id,
+                    ),
                     created_at,
                     updated_at,
                 });
@@ -544,26 +699,27 @@ impl CodeRabbitFetcher {
             if !is_coderabbit_login(&comment.user.login) {
                 continue;
             }
-            if let Some((category, severity)) = parse_actionable(&comment.body) {
-                let created_at = parse_timestamp(Some(&comment.created_at)).unwrap_or(observed_at);
-                let updated_at = parse_timestamp(Some(&comment.updated_at)).unwrap_or(created_at);
-                drafts.push(CodeRabbitItemDraft {
-                    comment_id: comment.id,
-                    commit_id: None,
-                    source: CodeRabbitItemSource::IssueComment,
-                    category,
-                    severity,
-                    file_path: None,
-                    line: None,
-                    original_line: None,
-                    diff_hunk: None,
-                    html_url: comment.html_url,
-                    body: comment.body.clone(),
-                    agent_prompt: extract_prompt_for_ai_agents(&comment.body),
-                    created_at,
-                    updated_at,
-                });
-            }
+            let created_at = parse_timestamp(Some(&comment.created_at)).unwrap_or(observed_at);
+            let updated_at = parse_timestamp(Some(&comment.updated_at)).unwrap_or(created_at);
+            let body = sanitize_comment_body(&comment.body);
+            comments.push(CodeRabbitCommentDraft {
+                comment_id: comment.id,
+                commit_id: None,
+                source: CodeRabbitItemSource::IssueComment,
+                html_url: comment.html_url.clone(),
+                body: body.clone(),
+                created_at,
+                updated_at,
+            });
+            items.extend(extract_section_items(
+                &body,
+                CodeRabbitItemSource::IssueComment,
+                comment.id,
+                None,
+                &comment.html_url,
+                created_at,
+                updated_at,
+            ));
         }
 
         for review in reviews {
@@ -574,29 +730,29 @@ impl CodeRabbitFetcher {
             if body.is_empty() {
                 continue;
             }
-            if let Some((category, severity)) = parse_actionable(&body) {
-                let created_at =
-                    parse_timestamp(review.submitted_at.as_deref()).unwrap_or(observed_at);
-                drafts.push(CodeRabbitItemDraft {
-                    comment_id: review.id,
-                    commit_id: review.commit_id.clone(),
-                    source: CodeRabbitItemSource::Review,
-                    category,
-                    severity,
-                    file_path: None,
-                    line: None,
-                    original_line: None,
-                    diff_hunk: None,
-                    html_url: review.html_url,
-                    body: body.clone(),
-                    agent_prompt: extract_prompt_for_ai_agents(&body),
-                    created_at,
-                    updated_at: created_at,
-                });
-            }
+            let created_at = parse_timestamp(review.submitted_at.as_deref()).unwrap_or(observed_at);
+            let body = sanitize_comment_body(&body);
+            comments.push(CodeRabbitCommentDraft {
+                comment_id: review.id,
+                commit_id: review.commit_id.clone(),
+                source: CodeRabbitItemSource::Review,
+                html_url: review.html_url.clone(),
+                body: body.clone(),
+                created_at,
+                updated_at: created_at,
+            });
+            items.extend(extract_section_items(
+                &body,
+                CodeRabbitItemSource::Review,
+                review.id,
+                review.commit_id.clone(),
+                &review.html_url,
+                created_at,
+                created_at,
+            ));
         }
 
-        Ok(drafts)
+        Ok(CodeRabbitFetchResult { comments, items })
     }
 }
 
@@ -698,6 +854,360 @@ fn parse_actionable(body: &str) -> Option<(CodeRabbitCategory, Option<CodeRabbit
     Some((category, severity))
 }
 
+fn sanitize_comment_body(body: &str) -> String {
+    strip_internal_state(body)
+}
+
+fn strip_internal_state(body: &str) -> String {
+    let start_marker = "<!-- internal state start -->";
+    let end_marker = "<!-- internal state end -->";
+    let mut result = String::with_capacity(body.len());
+    let mut remaining = body;
+
+    loop {
+        let Some(start) = remaining.find(start_marker) else {
+            result.push_str(remaining);
+            break;
+        };
+        let after_start = &remaining[start + start_marker.len()..];
+        let Some(end) = after_start.find(end_marker) else {
+            return body.to_string();
+        };
+        result.push_str(&remaining[..start]);
+        remaining = &after_start[end + end_marker.len()..];
+    }
+
+    result
+}
+
+fn extract_section_items(
+    body: &str,
+    source: CodeRabbitItemSource,
+    comment_id: i64,
+    commit_id: Option<String>,
+    html_url: &str,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> Vec<CodeRabbitItemDraft> {
+    let mut drafts = Vec::new();
+    let sections = [
+        (
+            "outside diff range comments",
+            CodeRabbitItemKind::OutsideDiff,
+            "outside-diff-range",
+        ),
+        ("nitpick comments", CodeRabbitItemKind::Nitpick, "nitpick"),
+    ];
+
+    for (label, kind, section) in sections {
+        for item in parse_section_items(body, label) {
+            let key = item_key_for_section(
+                kind,
+                &item.file_path,
+                item.line_start,
+                item.line_end,
+                item.title.as_deref(),
+                &item.body,
+            );
+            let line = if item.line_start == item.line_end {
+                Some(item.line_start)
+            } else {
+                None
+            };
+            let actionable = !matches!(kind, CodeRabbitItemKind::Nitpick);
+            drafts.push(CodeRabbitItemDraft {
+                comment_id,
+                commit_id: commit_id.clone(),
+                source,
+                kind,
+                actionable,
+                category: None,
+                severity: None,
+                section: Some(section.to_string()),
+                file_path: Some(item.file_path),
+                line,
+                line_start: Some(item.line_start),
+                line_end: Some(item.line_end),
+                original_line: None,
+                diff_hunk: None,
+                html_url: html_url.to_string(),
+                body: item.body,
+                agent_prompt: None,
+                item_key: key,
+                created_at,
+                updated_at,
+            });
+        }
+    }
+
+    drafts
+}
+
+#[derive(Debug)]
+struct ParsedSectionItem {
+    file_path: String,
+    line_start: i64,
+    line_end: i64,
+    title: Option<String>,
+    body: String,
+}
+
+fn parse_section_items(body: &str, label: &str) -> Vec<ParsedSectionItem> {
+    let mut items = Vec::new();
+    for block in find_section_blocks(body, label) {
+        items.extend(parse_items_from_block(block));
+    }
+    items
+}
+
+fn find_section_blocks<'a>(body: &'a str, label: &str) -> Vec<&'a str> {
+    let mut blocks = Vec::new();
+    let label_lower = label.to_ascii_lowercase();
+    let mut offset = 0usize;
+    for line in body.lines() {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("<summary>") && lower.contains(&label_lower) {
+            if let Some(start) = body[..offset].rfind("<details>") {
+                if let Some((block, _end)) = extract_details_block(body, start) {
+                    blocks.push(block);
+                }
+            }
+        }
+        offset = offset.saturating_add(line.len() + 1);
+    }
+    blocks
+}
+
+fn extract_details_block<'a>(body: &'a str, start: usize) -> Option<(&'a str, usize)> {
+    let mut idx = start;
+    let mut depth = 0i64;
+    while idx < body.len() {
+        let rest = &body[idx..];
+        let next_open = rest.find("<details>");
+        let next_close = rest.find("</details>");
+        let (next_pos, is_open) = match (next_open, next_close) {
+            (Some(open), Some(close)) => {
+                if open <= close {
+                    (open, true)
+                } else {
+                    (close, false)
+                }
+            }
+            (Some(open), None) => (open, true),
+            (None, Some(close)) => (close, false),
+            (None, None) => break,
+        };
+        let tag_start = idx + next_pos;
+        if is_open {
+            depth += 1;
+            idx = tag_start + "<details>".len();
+        } else {
+            depth -= 1;
+            idx = tag_start + "</details>".len();
+            if depth == 0 {
+                return Some((&body[start..idx], idx));
+            }
+        }
+    }
+    None
+}
+
+fn parse_items_from_block(block: &str) -> Vec<ParsedSectionItem> {
+    let mut items = Vec::new();
+    let mut current_file: Option<String> = None;
+    let mut current_item: Option<ItemBuilder> = None;
+
+    for line in block.lines() {
+        let normalized = strip_blockquote_prefix(line);
+        if let Some(file_path) = parse_file_summary_line(normalized) {
+            finalize_item(&mut current_item, &mut items);
+            current_file = Some(file_path);
+            continue;
+        }
+
+        if let Some(header) = parse_item_header_line(normalized) {
+            finalize_item(&mut current_item, &mut items);
+            current_item = Some(ItemBuilder {
+                file_path: current_file.clone(),
+                line_start: Some(header.line_start),
+                line_end: Some(header.line_end),
+                title: header.title,
+                body_lines: vec![normalized.trim().to_string()],
+            });
+            continue;
+        }
+
+        if let Some(ref mut item) = current_item {
+            item.body_lines.push(normalized.to_string());
+        }
+    }
+
+    finalize_item(&mut current_item, &mut items);
+    items
+}
+
+#[derive(Debug)]
+struct ItemHeader {
+    line_start: i64,
+    line_end: i64,
+    title: Option<String>,
+}
+
+fn parse_item_header_line(line: &str) -> Option<ItemHeader> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('`') || trimmed.starts_with("```") {
+        return None;
+    }
+    let rest = &trimmed[1..];
+    let backtick_end = rest.find('`')?;
+    let range = &rest[..backtick_end];
+    let (line_start, line_end) = parse_line_range(range)?;
+    let after = rest[backtick_end + 1..].trim();
+    let title = extract_bold_title(after).or_else(|| extract_plain_title(after));
+    Some(ItemHeader {
+        line_start,
+        line_end,
+        title,
+    })
+}
+
+fn parse_file_summary_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let start = trimmed.find("<summary>")?;
+    let rest = &trimmed[start + "<summary>".len()..];
+    let end = rest.find("</summary>")?;
+    let summary = rest[..end].trim();
+    let path = summary.split(" (").next()?.trim();
+    if looks_like_path(path) {
+        Some(path.to_string())
+    } else {
+        None
+    }
+}
+
+fn looks_like_path(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    trimmed.contains('/') || trimmed.contains('.')
+}
+
+fn parse_line_range(value: &str) -> Option<(i64, i64)> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((start, end)) = trimmed.split_once('-') {
+        let start = start.trim().parse::<i64>().ok()?;
+        let end = end.trim().parse::<i64>().ok()?;
+        return Some((start, end));
+    }
+    let single = trimmed.parse::<i64>().ok()?;
+    Some((single, single))
+}
+
+fn strip_blockquote_prefix(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix('>') {
+        rest.trim_start()
+    } else {
+        trimmed
+    }
+}
+
+fn extract_bold_title(value: &str) -> Option<String> {
+    let start = value.find("**")?;
+    let rest = &value[start + 2..];
+    let end = rest.find("**")?;
+    let title = rest[..end].trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
+}
+
+fn extract_plain_title(value: &str) -> Option<String> {
+    let trimmed = value.trim_start_matches(':').trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn finalize_item(current_item: &mut Option<ItemBuilder>, items: &mut Vec<ParsedSectionItem>) {
+    let Some(builder) = current_item.take() else {
+        return;
+    };
+    let Some(file_path) = builder.file_path else {
+        return;
+    };
+    let Some(line_start) = builder.line_start else {
+        return;
+    };
+    let line_end = builder.line_end.unwrap_or(line_start);
+    let body = builder.body_lines.join("\n").trim().to_string();
+    if body.is_empty() {
+        return;
+    }
+    items.push(ParsedSectionItem {
+        file_path,
+        line_start,
+        line_end,
+        title: builder.title,
+        body,
+    });
+}
+
+struct ItemBuilder {
+    file_path: Option<String>,
+    line_start: Option<i64>,
+    line_end: Option<i64>,
+    title: Option<String>,
+    body_lines: Vec<String>,
+}
+
+fn item_key_for_inline_comment(source: CodeRabbitItemSource, comment_id: i64) -> String {
+    hash_key(&format!("comment:{}:{}", source.as_str(), comment_id))
+}
+
+fn item_key_for_section(
+    kind: CodeRabbitItemKind,
+    file_path: &str,
+    line_start: i64,
+    line_end: i64,
+    title: Option<&str>,
+    body: &str,
+) -> String {
+    let text = title.unwrap_or(body);
+    let normalized = normalize_key_text(text);
+    let raw = format!(
+        "{}|{}|{}|{}|{}",
+        kind.as_str(),
+        file_path,
+        line_start,
+        line_end,
+        normalized
+    );
+    hash_key(&raw)
+}
+
+fn normalize_key_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn hash_key(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 fn extract_prompt_for_ai_agents(body: &str) -> Option<String> {
     let marker = "Prompt for AI Agents";
     let start = body.find(marker)?;
@@ -719,6 +1229,22 @@ fn parse_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+fn build_comments(round_id: Uuid, drafts: &[CodeRabbitCommentDraft]) -> Vec<CodeRabbitComment> {
+    drafts
+        .iter()
+        .map(|draft| CodeRabbitComment {
+            id: Uuid::new_v4(),
+            round_id,
+            comment_id: draft.comment_id,
+            source: draft.source,
+            html_url: draft.html_url.clone(),
+            body: draft.body.clone(),
+            created_at: draft.created_at,
+            updated_at: draft.updated_at,
+        })
+        .collect()
+}
+
 fn build_items(round_id: Uuid, drafts: &[CodeRabbitItemDraft]) -> Vec<CodeRabbitItem> {
     drafts
         .iter()
@@ -727,19 +1253,90 @@ fn build_items(round_id: Uuid, drafts: &[CodeRabbitItemDraft]) -> Vec<CodeRabbit
             round_id,
             comment_id: draft.comment_id,
             source: draft.source,
+            kind: draft.kind,
+            actionable: draft.actionable,
             category: draft.category,
             severity: draft.severity,
+            section: draft.section.clone(),
             file_path: draft.file_path.clone(),
             line: draft.line,
+            line_start: draft.line_start,
+            line_end: draft.line_end,
             original_line: draft.original_line,
             diff_hunk: draft.diff_hunk.clone(),
             html_url: draft.html_url.clone(),
             body: draft.body.clone(),
             agent_prompt: draft.agent_prompt.clone(),
+            item_key: draft.item_key.clone(),
             created_at: draft.created_at,
             updated_at: draft.updated_at,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_outside_diff_and_nitpicks() {
+        let body = r#"
+> <details>
+> <summary>Outside diff range comments (2)</summary><blockquote>
+>
+> <details>
+> <summary>src/data/database.rs (1)</summary><blockquote>
+>
+> `337-343`: **Early return skips subsequent migrations.**
+>
+> If `fork_seeds` exists but lacks `seed_prompt_text`, this exits early.
+> </blockquote></details>
+> <details>
+> <summary>src/ui/app.rs (1)</summary><blockquote>
+>
+> `8555-8572`: **Fix CI: missing coderabbit_processor.**
+> </blockquote></details>
+>
+> </blockquote></details>
+
+<details>
+<summary>Nitpick comments (1)</summary><blockquote>
+<details>
+<summary>src/data/coderabbit.rs (1)</summary><blockquote>
+`117-133`: **Silent fallbacks may mask database corruption.**
+</blockquote></details>
+</blockquote></details>
+"#;
+
+        let now = Utc::now();
+        let items = extract_section_items(
+            body,
+            CodeRabbitItemSource::Review,
+            123,
+            Some("deadbeef".to_string()),
+            "https://example.com",
+            now,
+            now,
+        );
+
+        let outside_diff: Vec<_> = items
+            .iter()
+            .filter(|item| item.kind == CodeRabbitItemKind::OutsideDiff)
+            .collect();
+        let nitpicks: Vec<_> = items
+            .iter()
+            .filter(|item| item.kind == CodeRabbitItemKind::Nitpick)
+            .collect();
+
+        assert_eq!(outside_diff.len(), 2);
+        assert_eq!(nitpicks.len(), 1);
+        assert!(outside_diff.iter().all(|item| item.actionable));
+        assert!(nitpicks.iter().all(|item| !item.actionable));
+        assert_eq!(outside_diff[0].line_start, Some(337));
+        assert_eq!(outside_diff[0].line_end, Some(343));
+        assert_eq!(nitpicks[0].line_start, Some(117));
+        assert_eq!(nitpicks[0].line_end, Some(133));
+    }
 }
 
 #[derive(Debug, Deserialize)]

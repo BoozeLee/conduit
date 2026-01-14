@@ -35,9 +35,9 @@ use crate::agent::{
 use crate::coderabbit::{CodeRabbitCompletion, CodeRabbitProcessor};
 use crate::config::{parse_action, parse_key_notation, Config, KeyContext, COMMAND_NAMES};
 use crate::data::{
-    AppStateStore, CodeRabbitItemStore, CodeRabbitRoundStore, Database, ForkSeed, ForkSeedStore,
-    QueuedImageAttachment, QueuedMessage, QueuedMessageMode, Repository, RepositorySettingsStore,
-    RepositoryStore, SessionTab, SessionTabStore, WorkspaceStore,
+    AppStateStore, CodeRabbitCommentStore, CodeRabbitItemStore, CodeRabbitRoundStore, Database,
+    ForkSeed, ForkSeedStore, QueuedImageAttachment, QueuedMessage, QueuedMessageMode, Repository,
+    RepositorySettingsStore, RepositoryStore, SessionTab, SessionTabStore, WorkspaceStore,
 };
 use crate::git::{PrManager, PrStatus, WorktreeManager};
 use crate::ui::action::Action;
@@ -220,6 +220,7 @@ impl App {
             fork_seed_dao,
             repo_settings_dao,
             coderabbit_round_dao,
+            coderabbit_comment_dao,
             coderabbit_item_dao,
         ) = match Database::open_default() {
             Ok(db) => {
@@ -230,6 +231,7 @@ impl App {
                 let fork_seed_dao = ForkSeedStore::new(db.connection());
                 let repo_settings_dao = RepositorySettingsStore::new(db.connection());
                 let coderabbit_round_dao = CodeRabbitRoundStore::new(db.connection());
+                let coderabbit_comment_dao = CodeRabbitCommentStore::new(db.connection());
                 let coderabbit_item_dao = CodeRabbitItemStore::new(db.connection());
                 (
                     Some(repo_dao),
@@ -239,12 +241,13 @@ impl App {
                     Some(fork_seed_dao),
                     Some(repo_settings_dao),
                     Some(coderabbit_round_dao),
+                    Some(coderabbit_comment_dao),
                     Some(coderabbit_item_dao),
                 )
             }
             Err(e) => {
                 eprintln!("Warning: Failed to open database: {}", e);
-                (None, None, None, None, None, None, None, None)
+                (None, None, None, None, None, None, None, None, None)
             }
         };
 
@@ -290,6 +293,7 @@ impl App {
             workspace_dao.clone(),
             repo_settings_dao.clone(),
             coderabbit_round_dao.clone(),
+            coderabbit_comment_dao.clone(),
             coderabbit_item_dao.clone(),
         ) {
             (
@@ -297,12 +301,14 @@ impl App {
                 Some(workspace_dao),
                 Some(repo_settings_dao),
                 Some(coderabbit_round_dao),
+                Some(coderabbit_comment_dao),
                 Some(coderabbit_item_dao),
             ) => Some(CodeRabbitProcessor::new(
                 repo_dao,
                 workspace_dao,
                 repo_settings_dao,
                 coderabbit_round_dao,
+                coderabbit_comment_dao,
                 coderabbit_item_dao,
             )),
             _ => None,

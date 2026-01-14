@@ -15,7 +15,8 @@ pub use agent::{
 };
 pub use config::Config;
 pub use data::{
-    CodeRabbitCategory, CodeRabbitItem, CodeRabbitItemSource, CodeRabbitItemStore, CodeRabbitMode,
+    CodeRabbitCategory, CodeRabbitComment, CodeRabbitCommentStore, CodeRabbitFeedbackScope,
+    CodeRabbitItem, CodeRabbitItemKind, CodeRabbitItemSource, CodeRabbitItemStore, CodeRabbitMode,
     CodeRabbitRetention, CodeRabbitRound, CodeRabbitRoundStatus, CodeRabbitRoundStore,
     CodeRabbitSeverity, Database, Repository, RepositorySettings, RepositorySettingsStore,
     RepositoryStore, Workspace, WorkspaceStore,

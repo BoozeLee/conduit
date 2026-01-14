@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS repository_settings (
     repository_id TEXT PRIMARY KEY,
     coderabbit_mode TEXT NOT NULL DEFAULT 'auto',
     coderabbit_retention TEXT NOT NULL DEFAULT 'keep',
+    coderabbit_scope TEXT NOT NULL DEFAULT 'all',
     coderabbit_backoff_seconds TEXT NOT NULL DEFAULT '30,120,300',
     updated_at TEXT NOT NULL,
     FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
@@ -97,6 +98,7 @@ CREATE TABLE IF NOT EXISTS coderabbit_rounds (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     next_fetch_at TEXT,
     actionable_count INTEGER NOT NULL DEFAULT 0,
+    total_count INTEGER NOT NULL DEFAULT 0,
     completed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -114,22 +116,43 @@ CREATE TABLE IF NOT EXISTS coderabbit_items (
     round_id TEXT NOT NULL,
     comment_id INTEGER NOT NULL,
     source TEXT NOT NULL,
-    category TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    actionable INTEGER NOT NULL DEFAULT 1,
+    category TEXT,
     severity TEXT,
+    section TEXT,
     file_path TEXT,
     line INTEGER,
+    line_start INTEGER,
+    line_end INTEGER,
     original_line INTEGER,
     diff_hunk TEXT,
     html_url TEXT NOT NULL,
     body TEXT NOT NULL,
     agent_prompt TEXT,
+    item_key TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (round_id) REFERENCES coderabbit_rounds(id) ON DELETE CASCADE
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_items_unique
-    ON coderabbit_items(comment_id, source);
+    ON coderabbit_items(round_id, item_key);
+
+CREATE TABLE IF NOT EXISTS coderabbit_comments (
+    id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL,
+    comment_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    html_url TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (round_id) REFERENCES coderabbit_rounds(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_comments_unique
+    ON coderabbit_comments(round_id, comment_id, source);
 "#;
 
 #[derive(Error, Debug)]
@@ -468,6 +491,7 @@ CREATE TABLE IF NOT EXISTS repository_settings (
     repository_id TEXT PRIMARY KEY,
     coderabbit_mode TEXT NOT NULL DEFAULT 'auto',
     coderabbit_retention TEXT NOT NULL DEFAULT 'keep',
+    coderabbit_scope TEXT NOT NULL DEFAULT 'all',
     coderabbit_backoff_seconds TEXT NOT NULL DEFAULT '30,120,300',
     updated_at TEXT NOT NULL,
     FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
@@ -501,6 +525,7 @@ CREATE TABLE IF NOT EXISTS coderabbit_rounds (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     next_fetch_at TEXT,
     actionable_count INTEGER NOT NULL DEFAULT 0,
+    total_count INTEGER NOT NULL DEFAULT 0,
     completed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -533,22 +558,180 @@ CREATE TABLE IF NOT EXISTS coderabbit_items (
     round_id TEXT NOT NULL,
     comment_id INTEGER NOT NULL,
     source TEXT NOT NULL,
-    category TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    actionable INTEGER NOT NULL DEFAULT 1,
+    category TEXT,
     severity TEXT,
+    section TEXT,
     file_path TEXT,
     line INTEGER,
+    line_start INTEGER,
+    line_end INTEGER,
     original_line INTEGER,
     diff_hunk TEXT,
     html_url TEXT NOT NULL,
     body TEXT NOT NULL,
     agent_prompt TEXT,
+    item_key TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (round_id) REFERENCES coderabbit_rounds(id) ON DELETE CASCADE
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_items_unique
-    ON coderabbit_items(comment_id, source);
+    ON coderabbit_items(round_id, item_key);
+
+CREATE TABLE IF NOT EXISTS coderabbit_comments (
+    id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL,
+    comment_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    html_url TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (round_id) REFERENCES coderabbit_rounds(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_comments_unique
+    ON coderabbit_comments(round_id, comment_id, source);
+"#,
+            )?;
+        }
+
+        // Migration 13: Add coderabbit_scope column to repository_settings
+        let has_coderabbit_scope: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('repository_settings') WHERE name='coderabbit_scope'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !has_coderabbit_scope {
+            conn.execute(
+                "ALTER TABLE repository_settings ADD COLUMN coderabbit_scope TEXT NOT NULL DEFAULT 'all'",
+                [],
+            )?;
+        }
+
+        // Migration 14: Add total_count to coderabbit_rounds
+        let has_total_count: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('coderabbit_rounds') WHERE name='total_count'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !has_total_count {
+            conn.execute(
+                "ALTER TABLE coderabbit_rounds ADD COLUMN total_count INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
+        // Migration 15: Add coderabbit_comments table
+        let coderabbit_comments_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='coderabbit_comments'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !coderabbit_comments_exists {
+            conn.execute_batch(
+                r#"
+CREATE TABLE IF NOT EXISTS coderabbit_comments (
+    id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL,
+    comment_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    html_url TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (round_id) REFERENCES coderabbit_rounds(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_comments_unique
+    ON coderabbit_comments(round_id, comment_id, source);
+"#,
+            )?;
+        }
+
+        // Migration 16: Expand coderabbit_items schema for non-actionable items
+        let has_item_key: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('coderabbit_items') WHERE name='item_key'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !has_item_key {
+            conn.execute_batch(
+                r#"
+CREATE TABLE coderabbit_items_new (
+    id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL,
+    comment_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    actionable INTEGER NOT NULL DEFAULT 1,
+    category TEXT,
+    severity TEXT,
+    section TEXT,
+    file_path TEXT,
+    line INTEGER,
+    line_start INTEGER,
+    line_end INTEGER,
+    original_line INTEGER,
+    diff_hunk TEXT,
+    html_url TEXT NOT NULL,
+    body TEXT NOT NULL,
+    agent_prompt TEXT,
+    item_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (round_id) REFERENCES coderabbit_rounds(id) ON DELETE CASCADE
+);
+
+INSERT INTO coderabbit_items_new (
+    id, round_id, comment_id, source, kind, actionable, category, severity, section,
+    file_path, line, line_start, line_end, original_line, diff_hunk, html_url, body,
+    agent_prompt, item_key, created_at, updated_at
+)
+SELECT
+    id,
+    round_id,
+    comment_id,
+    source,
+    'actionable' AS kind,
+    1 AS actionable,
+    category,
+    severity,
+    NULL AS section,
+    file_path,
+    line,
+    line AS line_start,
+    line AS line_end,
+    original_line,
+    diff_hunk,
+    html_url,
+    body,
+    agent_prompt,
+    source || ':' || comment_id AS item_key,
+    created_at,
+    updated_at
+FROM coderabbit_items;
+
+DROP TABLE coderabbit_items;
+ALTER TABLE coderabbit_items_new RENAME TO coderabbit_items;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_items_unique
+    ON coderabbit_items(round_id, item_key);
 "#,
             )?;
         }
