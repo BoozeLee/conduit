@@ -115,7 +115,7 @@ fn check_run_key(check: &PrStatusCheck) -> Option<&str> {
     check
         .started_at
         .as_deref()
-        .or_else(|| check.completed_at.as_deref())
+        .or(check.completed_at.as_deref())
 }
 
 fn check_state_from_status(check: &PrStatusCheck) -> CodeRabbitCheckState {

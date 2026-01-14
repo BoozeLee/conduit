@@ -3287,7 +3287,7 @@ impl App {
 
         if let Some(ConfirmationContext::CodeRabbitEnqueue { round_id }) = &ctx {
             self.state.pending_coderabbit_send = None;
-            self.mark_coderabbit_round_processed(round_id.clone());
+            self.mark_coderabbit_round_processed(*round_id);
         }
 
         self.state.confirmation_dialog_state.hide();
