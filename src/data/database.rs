@@ -74,6 +74,62 @@ CREATE TABLE IF NOT EXISTS fork_seeds (
 );
 
 CREATE INDEX IF NOT EXISTS idx_fork_seeds_parent_session ON fork_seeds(parent_session_id);
+
+CREATE TABLE IF NOT EXISTS repository_settings (
+    repository_id TEXT PRIMARY KEY,
+    coderabbit_mode TEXT NOT NULL DEFAULT 'auto',
+    coderabbit_retention TEXT NOT NULL DEFAULT 'keep',
+    coderabbit_backoff_seconds TEXT NOT NULL DEFAULT '30,120,300',
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS coderabbit_rounds (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL,
+    workspace_id TEXT,
+    pr_number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    check_state TEXT NOT NULL,
+    check_started_at TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_fetch_at TEXT,
+    actionable_count INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_rounds_unique
+    ON coderabbit_rounds(repository_id, pr_number, head_sha, check_started_at);
+CREATE INDEX IF NOT EXISTS idx_coderabbit_rounds_pending
+    ON coderabbit_rounds(status, next_fetch_at);
+
+CREATE TABLE IF NOT EXISTS coderabbit_items (
+    id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL,
+    comment_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    category TEXT NOT NULL,
+    severity TEXT,
+    file_path TEXT,
+    line INTEGER,
+    original_line INTEGER,
+    diff_hunk TEXT,
+    html_url TEXT NOT NULL,
+    body TEXT NOT NULL,
+    agent_prompt TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (round_id) REFERENCES coderabbit_rounds(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_items_unique
+    ON coderabbit_items(comment_id, source);
 "#;
 
 #[derive(Error, Debug)]
@@ -395,6 +451,107 @@ CREATE TABLE IF NOT EXISTS fork_seeds_new (
             "UPDATE session_tabs SET input_history = '[]' WHERE input_history IS NULL",
             [],
         )?;
+
+        // Migration 10: Add repository_settings table
+        let repo_settings_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='repository_settings'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !repo_settings_exists {
+            conn.execute_batch(
+                r#"
+CREATE TABLE IF NOT EXISTS repository_settings (
+    repository_id TEXT PRIMARY KEY,
+    coderabbit_mode TEXT NOT NULL DEFAULT 'auto',
+    coderabbit_retention TEXT NOT NULL DEFAULT 'keep',
+    coderabbit_backoff_seconds TEXT NOT NULL DEFAULT '30,120,300',
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
+);
+"#,
+            )?;
+        }
+
+        // Migration 11: Add coderabbit_rounds table
+        let coderabbit_rounds_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='coderabbit_rounds'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !coderabbit_rounds_exists {
+            conn.execute_batch(
+                r#"
+CREATE TABLE IF NOT EXISTS coderabbit_rounds (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL,
+    workspace_id TEXT,
+    pr_number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    check_state TEXT NOT NULL,
+    check_started_at TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_fetch_at TEXT,
+    actionable_count INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_rounds_unique
+    ON coderabbit_rounds(repository_id, pr_number, head_sha, check_started_at);
+CREATE INDEX IF NOT EXISTS idx_coderabbit_rounds_pending
+    ON coderabbit_rounds(status, next_fetch_at);
+"#,
+            )?;
+        }
+
+        // Migration 12: Add coderabbit_items table
+        let coderabbit_items_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='coderabbit_items'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !coderabbit_items_exists {
+            conn.execute_batch(
+                r#"
+CREATE TABLE IF NOT EXISTS coderabbit_items (
+    id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL,
+    comment_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    category TEXT NOT NULL,
+    severity TEXT,
+    file_path TEXT,
+    line INTEGER,
+    original_line INTEGER,
+    diff_hunk TEXT,
+    html_url TEXT NOT NULL,
+    body TEXT NOT NULL,
+    agent_prompt TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (round_id) REFERENCES coderabbit_rounds(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coderabbit_items_unique
+    ON coderabbit_items(comment_id, source);
+"#,
+            )?;
+        }
 
         Ok(())
     }

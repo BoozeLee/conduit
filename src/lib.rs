@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod coderabbit;
 pub mod config;
 pub mod data;
 pub mod git;
@@ -13,7 +14,12 @@ pub use agent::{
     SessionStatus,
 };
 pub use config::Config;
-pub use data::{Database, Repository, RepositoryStore, Workspace, WorkspaceStore};
+pub use data::{
+    CodeRabbitCategory, CodeRabbitItem, CodeRabbitItemSource, CodeRabbitItemStore, CodeRabbitMode,
+    CodeRabbitRetention, CodeRabbitRound, CodeRabbitRoundStatus, CodeRabbitRoundStore,
+    CodeRabbitSeverity, Database, Repository, RepositorySettings, RepositorySettingsStore,
+    RepositoryStore, Workspace, WorkspaceStore,
+};
 pub use git::{
     CheckState, CheckStatus, MergeReadiness, MergeableStatus, PrManager, PrPreflightResult,
     PrState, PrStatus, ReviewDecision, WorktreeInfo, WorktreeManager,

@@ -32,10 +32,12 @@ use crate::agent::{
     AgentMode, AgentRunner, AgentStartConfig, AgentType, ClaudeCodeRunner, CodexCliRunner,
     GeminiCliRunner, HistoryDebugEntry, MessageDisplay, ModelRegistry, SessionId,
 };
+use crate::coderabbit::{CodeRabbitCompletion, CodeRabbitProcessor};
 use crate::config::{parse_action, parse_key_notation, Config, KeyContext, COMMAND_NAMES};
 use crate::data::{
-    AppStateStore, Database, ForkSeed, ForkSeedStore, QueuedImageAttachment, QueuedMessage,
-    QueuedMessageMode, Repository, RepositoryStore, SessionTab, SessionTabStore, WorkspaceStore,
+    AppStateStore, CodeRabbitItemStore, CodeRabbitRoundStore, Database, ForkSeed, ForkSeedStore,
+    QueuedImageAttachment, QueuedMessage, QueuedMessageMode, Repository, RepositorySettingsStore,
+    RepositoryStore, SessionTab, SessionTabStore, WorkspaceStore,
 };
 use crate::git::{PrManager, PrStatus, WorktreeManager};
 use crate::ui::action::Action;
@@ -174,6 +176,8 @@ pub struct App {
     session_tab_dao: Option<SessionTabStore>,
     /// Fork seed DAO (for persisting fork metadata)
     fork_seed_dao: Option<ForkSeedStore>,
+    /// CodeRabbit processor (feedback collection)
+    coderabbit_processor: Option<CodeRabbitProcessor>,
     /// Worktree manager
     worktree_manager: WorktreeManager,
     /// Background git/PR status tracker
@@ -208,27 +212,41 @@ impl App {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         // Initialize database and DAOs
-        let (repo_dao, workspace_dao, app_state_dao, session_tab_dao, fork_seed_dao) =
-            match Database::open_default() {
-                Ok(db) => {
-                    let repo_dao = RepositoryStore::new(db.connection());
-                    let workspace_dao = WorkspaceStore::new(db.connection());
-                    let app_state_dao = AppStateStore::new(db.connection());
-                    let session_tab_dao = SessionTabStore::new(db.connection());
-                    let fork_seed_dao = ForkSeedStore::new(db.connection());
-                    (
-                        Some(repo_dao),
-                        Some(workspace_dao),
-                        Some(app_state_dao),
-                        Some(session_tab_dao),
-                        Some(fork_seed_dao),
-                    )
-                }
-                Err(e) => {
-                    eprintln!("Warning: Failed to open database: {}", e);
-                    (None, None, None, None, None)
-                }
-            };
+        let (
+            repo_dao,
+            workspace_dao,
+            app_state_dao,
+            session_tab_dao,
+            fork_seed_dao,
+            repo_settings_dao,
+            coderabbit_round_dao,
+            coderabbit_item_dao,
+        ) = match Database::open_default() {
+            Ok(db) => {
+                let repo_dao = RepositoryStore::new(db.connection());
+                let workspace_dao = WorkspaceStore::new(db.connection());
+                let app_state_dao = AppStateStore::new(db.connection());
+                let session_tab_dao = SessionTabStore::new(db.connection());
+                let fork_seed_dao = ForkSeedStore::new(db.connection());
+                let repo_settings_dao = RepositorySettingsStore::new(db.connection());
+                let coderabbit_round_dao = CodeRabbitRoundStore::new(db.connection());
+                let coderabbit_item_dao = CodeRabbitItemStore::new(db.connection());
+                (
+                    Some(repo_dao),
+                    Some(workspace_dao),
+                    Some(app_state_dao),
+                    Some(session_tab_dao),
+                    Some(fork_seed_dao),
+                    Some(repo_settings_dao),
+                    Some(coderabbit_round_dao),
+                    Some(coderabbit_item_dao),
+                )
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to open database: {}", e);
+                (None, None, None, None, None, None, None, None)
+            }
+        };
 
         // Migrate old worktrees folder to workspaces (one-time migration)
         crate::util::migrate_worktrees_to_workspaces();
@@ -267,6 +285,29 @@ impl App {
             None => Arc::new(GeminiCliRunner::new()),
         };
 
+        let coderabbit_processor = match (
+            repo_dao.clone(),
+            workspace_dao.clone(),
+            repo_settings_dao.clone(),
+            coderabbit_round_dao.clone(),
+            coderabbit_item_dao.clone(),
+        ) {
+            (
+                Some(repo_dao),
+                Some(workspace_dao),
+                Some(repo_settings_dao),
+                Some(coderabbit_round_dao),
+                Some(coderabbit_item_dao),
+            ) => Some(CodeRabbitProcessor::new(
+                repo_dao,
+                workspace_dao,
+                repo_settings_dao,
+                coderabbit_round_dao,
+                coderabbit_item_dao,
+            )),
+            _ => None,
+        };
+
         let mut app = Self {
             config: config.clone(),
             tools,
@@ -281,6 +322,7 @@ impl App {
             app_state_dao,
             session_tab_dao,
             fork_seed_dao,
+            coderabbit_processor,
             worktree_manager,
             git_tracker,
         };
@@ -295,6 +337,8 @@ impl App {
 
         // Restore session state
         app.restore_session_state();
+
+        app.spawn_coderabbit_retry_loop();
 
         app
     }
@@ -536,6 +580,31 @@ impl App {
         }
 
         tracing::info!("Session state restoration complete");
+    }
+
+    fn spawn_coderabbit_retry_loop(&self) {
+        let Some(processor) = self.coderabbit_processor.clone() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(20));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let processor = processor.clone();
+                let result =
+                    tokio::task::spawn_blocking(move || processor.process_due_rounds()).await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::warn!(error = %error, "CodeRabbit retry loop failed");
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "CodeRabbit retry loop join failed");
+                    }
+                }
+            }
+        });
     }
 
     /// Refresh sidebar data from database
@@ -4712,6 +4781,7 @@ impl App {
                 workspace_id,
                 status,
             } => {
+                let status_for_cleanup = status.clone();
                 tracing::debug!(
                     workspace_id = %workspace_id,
                     pr_exists = status.as_ref().map(|s| s.exists),
@@ -4764,6 +4834,21 @@ impl App {
                         .sidebar_data
                         .clear_workspace_pr_status(workspace_id);
                 }
+
+                if let Some(status) = status_for_cleanup {
+                    if matches!(
+                        status.state,
+                        crate::git::PrState::Merged | crate::git::PrState::Closed
+                    ) {
+                        self.maybe_cleanup_coderabbit_rounds(workspace_id, status.number);
+                    }
+                }
+            }
+            GitTrackerUpdate::CodeRabbitCheckCompleted {
+                workspace_id,
+                completion,
+            } => {
+                self.handle_coderabbit_completion(workspace_id, completion);
             }
             GitTrackerUpdate::GitStatsChanged {
                 workspace_id,
@@ -4804,6 +4889,62 @@ impl App {
                     .update_workspace_branch(workspace_id, branch);
             }
         }
+    }
+
+    fn handle_coderabbit_completion(
+        &mut self,
+        workspace_id: Uuid,
+        completion: CodeRabbitCompletion,
+    ) {
+        let Some(processor) = self.coderabbit_processor.clone() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                processor.handle_completion(workspace_id, completion)
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(error = %error, "CodeRabbit completion handling failed");
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "CodeRabbit completion task failed");
+                }
+            }
+        });
+    }
+
+    fn maybe_cleanup_coderabbit_rounds(&self, workspace_id: Uuid, pr_number: Option<u32>) {
+        let Some(pr_number) = pr_number else {
+            return;
+        };
+        let Some(processor) = self.coderabbit_processor.clone() else {
+            return;
+        };
+        let workspace_dao = self.workspace_dao.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                let workspace_dao =
+                    workspace_dao.ok_or_else(|| anyhow!("Workspace database unavailable"))?;
+                let workspace = workspace_dao
+                    .get_by_id(workspace_id)
+                    .map_err(|e| anyhow!("Failed to load workspace for cleanup: {}", e))?
+                    .ok_or_else(|| anyhow!("Workspace missing for cleanup"))?;
+                processor.cleanup_rounds_if_needed(workspace.repository_id, pr_number as i64)
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(error = %error, "CodeRabbit cleanup failed");
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "CodeRabbit cleanup task failed");
+                }
+            }
+        });
     }
 
     fn flush_pending_agent_output(session: &mut crate::ui::session::AgentSession) {

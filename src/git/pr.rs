@@ -39,6 +39,53 @@ pub struct CheckStatus {
     pub skipped: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrStatusCheckKind {
+    CheckRun,
+    StatusContext,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrStatusCheck {
+    pub kind: PrStatusCheckKind,
+    pub name: Option<String>,
+    pub context: Option<String>,
+    pub status: Option<String>,
+    pub conclusion: Option<String>,
+    pub state: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub details_url: Option<String>,
+    pub target_url: Option<String>,
+}
+
+impl PrStatusCheck {
+    fn from_checks(checks: &[GhStatusCheck]) -> Vec<Self> {
+        checks.iter().map(Self::from_gh).collect()
+    }
+
+    fn from_gh(check: &GhStatusCheck) -> Self {
+        let kind = match check.type_name.as_deref() {
+            Some("CheckRun") => PrStatusCheckKind::CheckRun,
+            Some("StatusContext") => PrStatusCheckKind::StatusContext,
+            _ => PrStatusCheckKind::Unknown,
+        };
+        Self {
+            kind,
+            name: check.name.clone(),
+            context: check.context.clone(),
+            status: check.status.clone(),
+            conclusion: check.conclusion.clone(),
+            state: check.state.clone(),
+            started_at: check.started_at.clone(),
+            completed_at: check.completed_at.clone(),
+            details_url: check.details_url.clone(),
+            target_url: check.target_url.clone(),
+        }
+    }
+}
+
 impl CheckStatus {
     /// Get the overall check state
     pub fn state(&self) -> CheckState {
@@ -65,9 +112,9 @@ impl CheckStatus {
 
         for check in checks {
             // Check if this is a StatusContext (uses state field) vs CheckRun (uses status/conclusion)
-            if !check.state.is_empty() {
+            if let Some(state) = check.state.as_deref() {
                 // StatusContext: uses state field directly
-                match check.state.to_uppercase().as_str() {
+                match state.to_uppercase().as_str() {
                     "SUCCESS" => passed += 1,
                     "PENDING" | "EXPECTED" => pending += 1,
                     "FAILURE" | "ERROR" => failed += 1,
@@ -75,8 +122,20 @@ impl CheckStatus {
                 }
             } else {
                 // CheckRun: uses status/conclusion fields
-                match check.status.to_uppercase().as_str() {
-                    "COMPLETED" => match check.conclusion.to_uppercase().as_str() {
+                match check
+                    .status
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_uppercase()
+                    .as_str()
+                {
+                    "COMPLETED" => match check
+                        .conclusion
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_uppercase()
+                        .as_str()
+                    {
                         "SUCCESS" | "NEUTRAL" => passed += 1,
                         "FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" => failed += 1,
                         "SKIPPED" => skipped += 1,
@@ -193,8 +252,12 @@ pub struct PrStatus {
     pub url: Option<String>,
     pub state: PrState,
     pub title: Option<String>,
+    /// Head commit SHA for the PR (if available)
+    pub head_sha: Option<String>,
     /// CI check status
     pub checks: CheckStatus,
+    /// Individual status checks from GitHub (for per-check tracking)
+    pub status_checks: Vec<PrStatusCheck>,
     /// Merge conflict status
     pub mergeable: MergeableStatus,
     /// Review decision
@@ -223,12 +286,26 @@ pub struct PrPreflightResult {
 /// while CheckRun entries use `status`/`conclusion` with an empty `state`.
 #[derive(Debug, Deserialize)]
 struct GhStatusCheck {
+    #[serde(rename = "__typename")]
+    type_name: Option<String>,
     #[serde(default)]
-    status: String, // "COMPLETED", "IN_PROGRESS", "QUEUED" (for CheckRun)
+    status: Option<String>, // "COMPLETED", "IN_PROGRESS", "QUEUED" (for CheckRun)
     #[serde(default)]
-    conclusion: String, // "SUCCESS", "FAILURE", "SKIPPED", "" (for CheckRun)
+    conclusion: Option<String>, // "SUCCESS", "FAILURE", "SKIPPED", "" (for CheckRun)
     #[serde(default)]
-    state: String, // "SUCCESS", "PENDING", "EXPECTED", "FAILURE", "ERROR" (for StatusContext)
+    state: Option<String>, // "SUCCESS", "PENDING", "EXPECTED", "FAILURE", "ERROR" (for StatusContext)
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    context: Option<String>,
+    #[serde(rename = "startedAt", default)]
+    started_at: Option<String>,
+    #[serde(rename = "completedAt", default)]
+    completed_at: Option<String>,
+    #[serde(rename = "detailsUrl", default)]
+    details_url: Option<String>,
+    #[serde(rename = "targetUrl", default)]
+    target_url: Option<String>,
 }
 
 /// JSON structure returned by `gh pr view --json`
@@ -245,6 +322,9 @@ struct GhPrView {
     /// CI status checks (can be CheckRun or StatusContext entries)
     #[serde(rename = "statusCheckRollup", default)]
     status_check_rollup: Vec<GhStatusCheck>,
+    /// Head commit SHA
+    #[serde(rename = "headRefOid", default)]
+    head_ref_oid: Option<String>,
     /// Merge conflict status: "MERGEABLE", "CONFLICTING", "UNKNOWN"
     #[serde(default)]
     mergeable: String,
@@ -409,7 +489,7 @@ impl PrManager {
                 "pr",
                 "view",
                 "--json",
-                "number,url,state,isDraft,mergedAt,title,statusCheckRollup,mergeable,reviewDecision",
+                "number,url,state,isDraft,mergedAt,title,statusCheckRollup,mergeable,reviewDecision,headRefOid",
             ])
             .current_dir(working_dir)
             .output()
@@ -423,7 +503,9 @@ impl PrManager {
                 url: None,
                 state: PrState::Unknown,
                 title: None,
+                head_sha: None,
                 checks: CheckStatus::default(),
+                status_checks: Vec::new(),
                 mergeable: MergeableStatus::Unknown,
                 review_decision: ReviewDecision::None,
                 merge_readiness: MergeReadiness::Unknown,
@@ -434,6 +516,7 @@ impl PrManager {
         if let Ok(pr) = serde_json::from_str::<GhPrView>(&json_str) {
             let state = PrState::from_gh_json(&pr.state, pr.is_draft, pr.merged_at.as_deref());
             let checks = CheckStatus::from_status_checks(&pr.status_check_rollup);
+            let status_checks = PrStatusCheck::from_checks(&pr.status_check_rollup);
             let mergeable = MergeableStatus::from_gh_json(&pr.mergeable);
             let review_decision = ReviewDecision::from_gh_json(&pr.review_decision);
             let merge_readiness = MergeReadiness::compute(&checks, mergeable, review_decision);
@@ -458,7 +541,9 @@ impl PrManager {
                 url: Some(pr.url),
                 state,
                 title: Some(pr.title),
+                head_sha: pr.head_ref_oid,
                 checks,
+                status_checks,
                 mergeable,
                 review_decision,
                 merge_readiness,
@@ -472,7 +557,9 @@ impl PrManager {
                 url: None,
                 state: PrState::Unknown,
                 title: None,
+                head_sha: None,
                 checks: CheckStatus::default(),
+                status_checks: Vec::new(),
                 mergeable: MergeableStatus::Unknown,
                 review_decision: ReviewDecision::None,
                 merge_readiness: MergeReadiness::Unknown,

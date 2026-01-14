@@ -216,6 +216,239 @@ impl SessionTab {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeRabbitMode {
+    Auto,
+    Enabled,
+    Disabled,
+}
+
+impl CodeRabbitMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeRabbitMode::Auto => "auto",
+            CodeRabbitMode::Enabled => "enabled",
+            CodeRabbitMode::Disabled => "disabled",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "enabled" => CodeRabbitMode::Enabled,
+            "disabled" => CodeRabbitMode::Disabled,
+            _ => CodeRabbitMode::Auto,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeRabbitRetention {
+    Keep,
+    DeleteOnClose,
+}
+
+impl CodeRabbitRetention {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeRabbitRetention::Keep => "keep",
+            CodeRabbitRetention::DeleteOnClose => "delete-on-close",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "delete-on-close" => CodeRabbitRetention::DeleteOnClose,
+            _ => CodeRabbitRetention::Keep,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RepositorySettings {
+    pub repository_id: Uuid,
+    pub coderabbit_mode: CodeRabbitMode,
+    pub coderabbit_retention: CodeRabbitRetention,
+    pub coderabbit_backoff_seconds: Vec<i64>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeRabbitRoundStatus {
+    Pending,
+    Complete,
+}
+
+impl CodeRabbitRoundStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeRabbitRoundStatus::Pending => "pending",
+            CodeRabbitRoundStatus::Complete => "complete",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "complete" => CodeRabbitRoundStatus::Complete,
+            _ => CodeRabbitRoundStatus::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeRabbitItemSource {
+    ReviewComment,
+    IssueComment,
+    Review,
+}
+
+impl CodeRabbitItemSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeRabbitItemSource::ReviewComment => "review-comment",
+            CodeRabbitItemSource::IssueComment => "issue-comment",
+            CodeRabbitItemSource::Review => "review",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "issue-comment" => CodeRabbitItemSource::IssueComment,
+            "review" => CodeRabbitItemSource::Review,
+            _ => CodeRabbitItemSource::ReviewComment,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeRabbitCategory {
+    PotentialIssue,
+    RefactorSuggestion,
+}
+
+impl CodeRabbitCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeRabbitCategory::PotentialIssue => "potential-issue",
+            CodeRabbitCategory::RefactorSuggestion => "refactor-suggestion",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "potential-issue" => Some(CodeRabbitCategory::PotentialIssue),
+            "refactor-suggestion" => Some(CodeRabbitCategory::RefactorSuggestion),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeRabbitSeverity {
+    Critical,
+    Major,
+    Minor,
+    Trivial,
+    Info,
+}
+
+impl CodeRabbitSeverity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CodeRabbitSeverity::Critical => "critical",
+            CodeRabbitSeverity::Major => "major",
+            CodeRabbitSeverity::Minor => "minor",
+            CodeRabbitSeverity::Trivial => "trivial",
+            CodeRabbitSeverity::Info => "info",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "critical" => Some(CodeRabbitSeverity::Critical),
+            "major" => Some(CodeRabbitSeverity::Major),
+            "minor" => Some(CodeRabbitSeverity::Minor),
+            "trivial" => Some(CodeRabbitSeverity::Trivial),
+            "info" => Some(CodeRabbitSeverity::Info),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeRabbitRound {
+    pub id: Uuid,
+    pub repository_id: Uuid,
+    pub workspace_id: Option<Uuid>,
+    pub pr_number: i64,
+    pub head_sha: String,
+    pub check_state: String,
+    pub check_started_at: DateTime<Utc>,
+    pub observed_at: DateTime<Utc>,
+    pub status: CodeRabbitRoundStatus,
+    pub attempt_count: i64,
+    pub next_fetch_at: Option<DateTime<Utc>>,
+    pub actionable_count: i64,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl CodeRabbitRound {
+    pub fn new(
+        repository_id: Uuid,
+        workspace_id: Option<Uuid>,
+        pr_number: i64,
+        head_sha: String,
+        check_state: String,
+        check_started_at: DateTime<Utc>,
+        observed_at: DateTime<Utc>,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            repository_id,
+            workspace_id,
+            pr_number,
+            head_sha,
+            check_state,
+            check_started_at,
+            observed_at,
+            status: CodeRabbitRoundStatus::Pending,
+            attempt_count: 0,
+            next_fetch_at: Some(observed_at),
+            actionable_count: 0,
+            completed_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeRabbitItem {
+    pub id: Uuid,
+    pub round_id: Uuid,
+    pub comment_id: i64,
+    pub source: CodeRabbitItemSource,
+    pub category: CodeRabbitCategory,
+    pub severity: Option<CodeRabbitSeverity>,
+    pub file_path: Option<String>,
+    pub line: Option<i64>,
+    pub original_line: Option<i64>,
+    pub diff_hunk: Option<String>,
+    pub html_url: String,
+    pub body: String,
+    pub agent_prompt: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Metadata for a forked session seed prompt
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkSeed {

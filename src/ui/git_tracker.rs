@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use crate::coderabbit::{detect_completion, CodeRabbitCompletion};
 use crate::git::{GitDiffStats, PrManager, PrStatus};
 
 /// Configuration for the background tracker
@@ -61,6 +62,11 @@ pub enum GitTrackerUpdate {
     BranchChanged {
         workspace_id: Uuid,
         branch: Option<String>,
+    },
+    /// CodeRabbit check completed for a PR
+    CodeRabbitCheckCompleted {
+        workspace_id: Uuid,
+        completion: CodeRabbitCompletion,
     },
 }
 
@@ -286,6 +292,21 @@ impl GitTracker {
                         .ok()
                         .flatten();
 
+                if let Some(new_status) = new_pr_status.as_ref() {
+                    if let Some(completion) =
+                        detect_completion(state.pr_status.as_ref(), new_status)
+                    {
+                        send_update(
+                            &update_tx,
+                            GitTrackerUpdate::CodeRabbitCheckCompleted {
+                                workspace_id,
+                                completion,
+                            },
+                            "coderabbit_check_completed",
+                        );
+                    }
+                }
+
                 // Compare with current state - include check status and merge readiness
                 let pr_changed = match (&state.pr_status, &new_pr_status) {
                     (None, Some(_)) => true,
@@ -295,6 +316,8 @@ impl GitTracker {
                             || old.state != new.state
                             || old.exists != new.exists
                             || old.checks.state() != new.checks.state()
+                            || old.status_checks != new.status_checks
+                            || old.head_sha != new.head_sha
                             || old.merge_readiness != new.merge_readiness
                             || old.mergeable != new.mergeable
                     }
