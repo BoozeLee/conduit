@@ -233,7 +233,7 @@ impl CodeRabbitMode {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value.to_ascii_lowercase().as_str() {
             "enabled" => CodeRabbitMode::Enabled,
             "disabled" => CodeRabbitMode::Disabled,
@@ -246,7 +246,7 @@ impl std::str::FromStr for CodeRabbitMode {
     type Err = std::convert::Infallible;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Ok(CodeRabbitMode::from_str(value))
+        Ok(CodeRabbitMode::parse(value))
     }
 }
 
@@ -265,7 +265,7 @@ impl CodeRabbitRetention {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value.to_ascii_lowercase().as_str() {
             "delete-on-close" => CodeRabbitRetention::DeleteOnClose,
             _ => CodeRabbitRetention::Keep,
@@ -277,7 +277,7 @@ impl std::str::FromStr for CodeRabbitRetention {
     type Err = std::convert::Infallible;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Ok(CodeRabbitRetention::from_str(value))
+        Ok(CodeRabbitRetention::parse(value))
     }
 }
 
@@ -305,7 +305,7 @@ impl CodeRabbitRoundStatus {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value.to_ascii_lowercase().as_str() {
             "complete" => CodeRabbitRoundStatus::Complete,
             _ => CodeRabbitRoundStatus::Pending,
@@ -317,7 +317,7 @@ impl std::str::FromStr for CodeRabbitRoundStatus {
     type Err = std::convert::Infallible;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Ok(CodeRabbitRoundStatus::from_str(value))
+        Ok(CodeRabbitRoundStatus::parse(value))
     }
 }
 
@@ -338,7 +338,7 @@ impl CodeRabbitItemSource {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value.to_ascii_lowercase().as_str() {
             "issue-comment" => CodeRabbitItemSource::IssueComment,
             "review" => CodeRabbitItemSource::Review,
@@ -351,7 +351,7 @@ impl std::str::FromStr for CodeRabbitItemSource {
     type Err = std::convert::Infallible;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Ok(CodeRabbitItemSource::from_str(value))
+        Ok(CodeRabbitItemSource::parse(value))
     }
 }
 
@@ -370,7 +370,7 @@ impl CodeRabbitCategory {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         value.parse().ok()
     }
 }
@@ -379,11 +379,7 @@ impl std::str::FromStr for CodeRabbitCategory {
     type Err = ();
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "potential-issue" => Ok(CodeRabbitCategory::PotentialIssue),
-            "refactor-suggestion" => Ok(CodeRabbitCategory::RefactorSuggestion),
-            _ => Err(()),
-        }
+        CodeRabbitCategory::parse(value).ok_or(())
     }
 }
 
@@ -408,7 +404,7 @@ impl CodeRabbitSeverity {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         value.parse().ok()
     }
 }
@@ -417,14 +413,7 @@ impl std::str::FromStr for CodeRabbitSeverity {
     type Err = ();
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "critical" => Ok(CodeRabbitSeverity::Critical),
-            "major" => Ok(CodeRabbitSeverity::Major),
-            "minor" => Ok(CodeRabbitSeverity::Minor),
-            "trivial" => Ok(CodeRabbitSeverity::Trivial),
-            "info" => Ok(CodeRabbitSeverity::Info),
-            _ => Err(()),
-        }
+        CodeRabbitSeverity::parse(value).ok_or(())
     }
 }
 

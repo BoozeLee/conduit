@@ -123,8 +123,8 @@ impl RepositorySettingsStore {
 
         Ok(RepositorySettings {
             repository_id: Uuid::parse_str(&repo_id).unwrap_or_else(|_| Uuid::new_v4()),
-            coderabbit_mode: CodeRabbitMode::from_str(&mode),
-            coderabbit_retention: CodeRabbitRetention::from_str(&retention),
+            coderabbit_mode: CodeRabbitMode::parse(&mode),
+            coderabbit_retention: CodeRabbitRetention::parse(&retention),
             coderabbit_backoff_seconds: parse_backoff_seconds(&backoff_raw),
             updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -279,7 +279,7 @@ impl CodeRabbitRoundStore {
             observed_at: DateTime::parse_from_rfc3339(&observed_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
-            status: CodeRabbitRoundStatus::from_str(&status_str),
+            status: CodeRabbitRoundStatus::parse(&status_str),
             attempt_count: row.get(9)?,
             next_fetch_at: next_fetch_at_str
                 .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
