@@ -55,6 +55,17 @@ export default function InviteEmail({
               access to the private repository.
             </Text>
 
+            {/* Discord Community */}
+            <Section style={styles.discordSection}>
+              <Text style={styles.discordHeading}>💬 Join our Discord community</Text>
+              <Text style={styles.discordText}>
+                Have questions? Get help and connect with other early adopters.{' '}
+                <Link href="https://discord.gg/F9pfRd642H" style={styles.discordLink}>
+                  Join Discord
+                </Link>
+              </Text>
+            </Section>
+
             <Text style={styles.expiry}>
               This invite expires in {expiresInDays} days.
             </Text>
@@ -142,6 +153,29 @@ const styles = {
     fontSize: '12px',
     textAlign: 'center' as const,
     margin: 0,
+  },
+  discordSection: {
+    marginTop: '24px',
+    paddingTop: '16px',
+    borderTop: '1px solid #2a2a3a',
+  },
+  discordHeading: {
+    color: '#a0a0b0',
+    fontSize: '14px',
+    fontWeight: '600' as const,
+    margin: '0 0 8px 0',
+    textAlign: 'center' as const,
+  },
+  discordText: {
+    color: '#808090',
+    fontSize: '13px',
+    lineHeight: '1.5',
+    margin: 0,
+    textAlign: 'center' as const,
+  },
+  discordLink: {
+    color: '#00d4ff',
+    textDecoration: 'none',
   },
   footer: {
     color: '#606070',

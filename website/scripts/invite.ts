@@ -95,6 +95,13 @@ function buildInviteEmailHtml(inviteUrl: string): string {
       <p style="color: #808090; font-size: 13px; line-height: 1.5; margin: 0 0 12px 0; text-align: center;">
         Click the button above to connect your GitHub account and get access to the private repository.
       </p>
+      <!-- Discord Community -->
+      <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #2a2a3a;">
+        <p style="color: #a0a0b0; font-size: 14px; font-weight: 600; margin: 0 0 8px 0; text-align: center;">💬 Join our Discord community</p>
+        <p style="color: #808090; font-size: 13px; line-height: 1.5; margin: 0; text-align: center;">
+          Have questions? Get help and connect with other early adopters. <a href="https://discord.gg/F9pfRd642H" style="color: #00d4ff; text-decoration: none;">Join Discord</a>
+        </p>
+      </div>
       <p style="color: #ffaa00; font-size: 12px; text-align: center; margin: 0;">This invite expires in 7 days.</p>
     </div>
     <p style="color: #606070; font-size: 12px; text-align: center; margin-top: 30px;">
