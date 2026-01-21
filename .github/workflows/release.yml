@@ -20,7 +20,7 @@ jobs:
             os: warp-ubuntu-latest-x64-8x
             archive: tar.gz
           - target: aarch64-apple-darwin
-            os: warp-macos-latest-arm64-8x
+            os: warp-macos-26-arm64-12x
             archive: tar.gz
 
     steps:
