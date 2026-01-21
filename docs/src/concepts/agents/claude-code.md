@@ -6,16 +6,15 @@
 
 - **Tool Execution** — Read, write, and execute commands
 - **Build/Plan Modes** — Toggle between full execution and read-only
-- **Multiple Models** — Opus, Sonnet, Haiku
+- **Multiple Models** — Opus 4.5, Sonnet 4.5
 - **200K Context** — Large context window
 
 ## Models
 
 | Model | Best For |
 |-------|----------|
-| Opus | Complex reasoning, architecture |
-| Sonnet | Balanced performance (default) |
-| Haiku | Quick tasks, low latency |
+| Opus 4.5 | Complex reasoning, architecture |
+| Sonnet 4.5 | Balanced performance (default) |
 
 ## Build vs Plan Mode
 

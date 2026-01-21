@@ -6,7 +6,13 @@
 
 - **Full Automation** — Executes code autonomously
 - **272K Context** — Extended context window
-- **Multiple Models** — Various OpenAI models
+- **GPT-5.2-Codex** — OpenAI's latest coding model
+
+## Models
+
+| Model | Best For |
+|-------|----------|
+| GPT-5.2-Codex | Code generation, analysis, and execution |
 
 ## Automation Mode
 

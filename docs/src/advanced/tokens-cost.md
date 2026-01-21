@@ -29,9 +29,8 @@ Press `Alt+P` to toggle the metrics display.
 
 | Model | Input | Output |
 |-------|-------|--------|
-| Claude Sonnet 3.5 | $3.00/1M | $15.00/1M |
-| Claude Opus | $15.00/1M | $75.00/1M |
-| Claude Haiku | $0.25/1M | $1.25/1M |
+| Claude Sonnet 4.5 | $3.00/1M | $15.00/1M |
+| Claude Opus 4.5 | $15.00/1M | $75.00/1M |
 
 ## Context Window
 

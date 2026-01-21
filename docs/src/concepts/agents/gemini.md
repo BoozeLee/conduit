@@ -12,8 +12,8 @@
 
 | Model | Best For |
 |-------|----------|
-| Gemini 2.5 Pro | Complex reasoning, large context |
-| Gemini 2.5 Flash | Balanced performance |
+| gemini-3-pro-preview | Complex reasoning, large context |
+| gemini-3-flash-preview | Balanced performance |
 
 ## Build vs Plan Mode
 
