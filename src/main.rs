@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use conduit_cli::{
+use conduit::{
     config::save_tool_path,
     ui::terminal_guard,
     util::{self, Tool, ToolAvailability},
@@ -109,10 +109,7 @@ async fn run_app() -> Result<()> {
     let config = Config::load();
 
     // Initialize theme from config
-    conduit_cli::ui::components::init_theme(
-        config.theme_name.as_deref(),
-        config.theme_path.as_deref(),
-    );
+    conduit::ui::components::init_theme(config.theme_name.as_deref(), config.theme_path.as_deref());
 
     // Detect tool availability
     let mut tools = ToolAvailability::detect(&config.tool_paths);
@@ -174,9 +171,7 @@ async fn run_app() -> Result<()> {
 /// This creates a minimal TUI just for the dialog, then returns control.
 /// Returns Some(path) if user provided a valid path, None if user chose to quit.
 fn run_blocking_tool_dialog(tool: Tool, _tools: &ToolAvailability) -> Result<Option<PathBuf>> {
-    use conduit_cli::ui::components::{
-        MissingToolDialog, MissingToolDialogState, MissingToolResult,
-    };
+    use conduit::ui::components::{MissingToolDialog, MissingToolDialogState, MissingToolResult};
     use crossterm::{
         event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
         execute,
@@ -275,7 +270,7 @@ fn run_blocking_tool_dialog(tool: Tool, _tools: &ToolAvailability) -> Result<Opt
 
 /// Run the theme migration command
 fn run_migrate_theme(input: &Path, output: Option<&Path>, extract_palette: bool) -> Result<()> {
-    use conduit_cli::ui::components::theme::migrate::{
+    use conduit::ui::components::theme::migrate::{
         migrate_vscode_theme, write_theme_file, MigrateOptions,
     };
 
@@ -341,8 +336,8 @@ fn run_migrate_theme(input: &Path, output: Option<&Path>, extract_palette: bool)
 
 /// Run the web server
 async fn run_web_server(host: String, port: u16) -> Result<()> {
-    use conduit_cli::core::ConduitCore;
-    use conduit_cli::web::{run_server, ServerConfig, WebAppState};
+    use conduit::core::ConduitCore;
+    use conduit::web::{run_server, ServerConfig, WebAppState};
 
     // Initialize logging to stdout for web server mode
     tracing_subscriber::fmt()

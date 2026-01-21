@@ -1,6 +1,6 @@
 [package]
 name = "conduit-cli"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 description = "Multi-agent TUI for Claude Code and Codex CLI"
 authors = ["Felipe Coury"]
@@ -9,6 +9,10 @@ repository = "https://github.com/conduit-cli/conduit"
 readme = "README.md"
 keywords = ["tui", "cli", "claude", "ai", "terminal"]
 categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "conduit"
+path = "src/lib.rs"
 
 [[bin]]
 name = "conduit"

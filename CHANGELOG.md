@@ -7,8 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-01-20
+
 ### Added
-- Open source release - Conduit is now free and publicly available
+- **Web Interface** - Full web UI with theme support, session management, file viewer
+- **Open Source Release** - Conduit is now free and publicly available
+- **Gemini CLI Support** - New agent integration for Google's Gemini CLI
+- **Install Script** - Curl-based binary installation for easy setup
+- Project management in web UI (add/remove projects with Ctrl+N)
+- Image support for queued messages
+- Workspace archive actions and session persistence
+- Web onboarding flow for first-time users
+- Tab shortcuts and clickable file paths in web viewer
+- Plan/Build mode toggle with Ctrl+Shift+P hotkey
+- Theme switcher with auto-scroll and better matching
+- Model selector dialog with full agent type switching
+- Paged session history
+- Bootstrap loading and chat parity updates
+- Task tool card rendering
+- Shared core services between TUI and web
+- E2E testing infrastructure with Termwright
+- GitHub issue and PR templates
+- Contributing documentation
+
+### Fixed
+- Harden workspace/web handlers
+- Claude image error handling improvements
+- Config borrow conflicts resolved
+- Web action edge cases
+- Model names updated to latest versions
+- Gemini CLI npm package name correction
+- Web tabs and models stability
+- Tool card display (line spacing, grep highlighting)
+- Chat input controls alignment
 
 ## [0.1.6] - 2025-01-18
 
@@ -94,7 +125,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Real-time streaming responses
 - Terminal-native UI with Ratatui
 
-[Unreleased]: https://github.com/conduit-cli/conduit/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/conduit-cli/conduit/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/conduit-cli/conduit/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/conduit-cli/conduit/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/conduit-cli/conduit/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/conduit-cli/conduit/compare/v0.1.3...v0.1.4

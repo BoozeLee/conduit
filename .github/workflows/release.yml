@@ -37,6 +37,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
       - name: Install dependencies (Linux)
         if: matrix.os == 'warp-ubuntu-latest-x64-4x'
         run: |
