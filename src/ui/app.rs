@@ -423,6 +423,7 @@ impl App {
             }
 
             let mut session = AgentSession::new(tab.agent_type);
+            session.id = tab.id;
             session.workspace_id = tab.workspace_id;
             session.model = tab.model;
             session.pr_number = tab.pr_number.map(|n| n as u32);
@@ -780,6 +781,7 @@ impl App {
                     session.model.clone(),
                     session.pr_number.map(|n| n as i32),
                 );
+                tab.id = session.id;
                 // Preserve agent mode for session restoration
                 tab.agent_mode = Some(session.agent_mode.as_str().to_string());
                 // Preserve pending user message for interrupted sessions
@@ -3207,9 +3209,18 @@ impl App {
         }
 
         // Create a new tab with the workspace's working directory
-        self.state
+        if self
+            .state
             .tab_manager
-            .new_tab_with_working_dir(tab_agent_type, workspace.path.clone());
+            .new_tab_with_working_dir(tab_agent_type, workspace.path.clone())
+            .is_none()
+        {
+            self.show_error(
+                "Too many tabs",
+                "Maximum number of tabs reached. Close a tab before opening another workspace.",
+            );
+            return;
+        }
 
         // Get default model before the mutable borrow
         let default_model = self.config().default_model_for(tab_agent_type);
@@ -3233,6 +3244,7 @@ impl App {
             }
             if let Some(saved) = saved_tab {
                 session.set_agent_and_model(saved.agent_type, saved.model);
+                session.title = saved.title.clone();
                 if let Some(saved_mode) = saved_agent_mode {
                     session.agent_mode = saved_mode; // Pre-clamped above
                 }
