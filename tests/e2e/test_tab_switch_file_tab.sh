@@ -33,9 +33,20 @@ cleanup_local() {
 mkdir -p "$DATA_DIR/workspaces/conduit/kind-mist"
 mkdir -p "$DATA_DIR/workspaces/conduit/live-jade"
 
-# Initialize git repos in workspace directories
-git init "$DATA_DIR/workspaces/conduit/kind-mist" >/dev/null 2>&1
-git init "$DATA_DIR/workspaces/conduit/live-jade" >/dev/null 2>&1
+# Initialize git repo at the repository base_path with an initial commit
+(
+  cd "$DATA_DIR/workspaces/conduit"
+  git init
+  git config user.email "test@test.com"
+  git config user.name "Test"
+  touch .gitkeep
+  git add .gitkeep
+  git commit -m "initial"
+  # Create branches that match workspace branches
+  git checkout -b test/kind-mist
+  git checkout -b test/live-jade
+  git checkout test/kind-mist
+) >/dev/null 2>&1
 
 cat > "$DATA_DIR/workspaces/conduit/kind-mist/README.md" <<'EOF_FILE'
 FILE TAB MARKER
