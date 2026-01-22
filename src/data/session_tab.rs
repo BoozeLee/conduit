@@ -5,6 +5,7 @@ use crate::agent::AgentType;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::sync::{Arc, Mutex};
+use tracing::warn;
 use uuid::Uuid;
 
 /// Data access object for session tab operations
@@ -27,11 +28,7 @@ impl SessionTabStore {
 
     pub fn create_with_next_index(&self, mut tab: SessionTab) -> SqliteResult<SessionTab> {
         let conn = self.conn.lock().unwrap();
-        let next_index: i32 = conn.query_row(
-            "SELECT COALESCE(MAX(tab_index), -1) + 1 FROM session_tabs",
-            [],
-            |row| row.get(0),
-        )?;
+        let next_index = Self::next_tab_index_with_conn(&conn)?;
         tab.tab_index = next_index;
         Self::insert_with_conn(&conn, &tab)?;
         Ok(tab)
@@ -105,6 +102,32 @@ impl SessionTabStore {
                 tab.fork_seed_id.map(|id| id.to_string()),
                 tab.title,
                 if tab.title_generated { 1 } else { 0 },
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn update_with_conn(conn: &Connection, tab: &SessionTab) -> SqliteResult<()> {
+        let queued_messages = serialize_queued_messages(&tab.queued_messages);
+        let input_history = serialize_input_history(&tab.input_history);
+        conn.execute(
+            "UPDATE session_tabs SET tab_index = ?2, is_open = ?3, workspace_id = ?4, agent_type = ?5, agent_mode = ?6,
+             agent_session_id = ?7, model = ?8, pr_number = ?9, pending_user_message = ?10, queued_messages = ?11, input_history = ?12, fork_seed_id = ?13, title = ?14 WHERE id = ?1",
+            params![
+                tab.id.to_string(),
+                tab.tab_index,
+                if tab.is_open { 1 } else { 0 },
+                tab.workspace_id.map(|id| id.to_string()),
+                tab.agent_type.as_str(),
+                tab.agent_mode,
+                tab.agent_session_id,
+                tab.model,
+                tab.pr_number,
+                tab.pending_user_message,
+                queued_messages,
+                input_history,
+                tab.fork_seed_id.map(|id| id.to_string()),
+                tab.title,
             ],
         )?;
         Ok(())
@@ -209,9 +232,38 @@ impl SessionTabStore {
     /// Get a session tab by workspace_id
     pub fn get_by_workspace_id(&self, workspace_id: Uuid) -> SqliteResult<Option<SessionTab>> {
         let conn = self.conn.lock().unwrap();
+        Self::get_by_workspace_id_with_conn(&conn, workspace_id)
+    }
+
+    pub(crate) fn get_by_workspace_id_with_conn(
+        conn: &Connection,
+        workspace_id: Uuid,
+    ) -> SqliteResult<Option<SessionTab>> {
         let mut stmt = conn.prepare(
             "SELECT id, tab_index, is_open, workspace_id, agent_type, agent_mode, agent_session_id, model, pr_number, created_at, pending_user_message, queued_messages, input_history, fork_seed_id, title, title_generated
              FROM session_tabs WHERE workspace_id = ?1 ORDER BY is_open DESC, created_at DESC LIMIT 1",
+        )?;
+
+        let mut rows = stmt.query(params![workspace_id.to_string()])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Self::row_to_session_tab(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_open_by_workspace_id(&self, workspace_id: Uuid) -> SqliteResult<Option<SessionTab>> {
+        let conn = self.conn.lock().unwrap();
+        Self::get_open_by_workspace_id_with_conn(&conn, workspace_id)
+    }
+
+    pub(crate) fn get_open_by_workspace_id_with_conn(
+        conn: &Connection,
+        workspace_id: Uuid,
+    ) -> SqliteResult<Option<SessionTab>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, tab_index, is_open, workspace_id, agent_type, agent_mode, agent_session_id, model, pr_number, created_at, pending_user_message, queued_messages, input_history, fork_seed_id, title
+             FROM session_tabs WHERE workspace_id = ?1 AND is_open = 1 ORDER BY created_at DESC LIMIT 1",
         )?;
 
         let mut rows = stmt.query(params![workspace_id.to_string()])?;
@@ -245,11 +297,45 @@ impl SessionTabStore {
     /// Allocate the next tab index value.
     pub fn next_tab_index(&self) -> SqliteResult<i32> {
         let conn = self.conn.lock().unwrap();
+        Self::next_tab_index_with_conn(&conn)
+    }
+
+    pub(crate) fn next_tab_index_with_conn(conn: &Connection) -> SqliteResult<i32> {
         conn.query_row(
             "SELECT COALESCE(MAX(tab_index), -1) + 1 FROM session_tabs",
             [],
             |row| row.get(0),
         )
+    }
+
+    pub(crate) fn create_with_next_index_with_conn(
+        conn: &Connection,
+        mut tab: SessionTab,
+    ) -> SqliteResult<SessionTab> {
+        let next_index = Self::next_tab_index_with_conn(conn)?;
+        tab.tab_index = next_index;
+        Self::insert_with_conn(conn, &tab)?;
+        Ok(tab)
+    }
+
+    pub fn with_immediate_transaction<F, T>(&self, f: F) -> SqliteResult<T>
+    where
+        F: FnOnce(&Connection) -> SqliteResult<T>,
+    {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        match f(&conn) {
+            Ok(value) => {
+                conn.execute_batch("COMMIT")?;
+                Ok(value)
+            }
+            Err(err) => {
+                if let Err(rollback_err) = conn.execute_batch("ROLLBACK") {
+                    warn!(error = %rollback_err, "Failed to rollback session tab transaction");
+                }
+                Err(err)
+            }
+        }
     }
 
     /// Convert a database row to a SessionTab

@@ -1,10 +1,13 @@
 use chrono::Utc;
+use rusqlite::{params, Error as SqliteError, ErrorCode, Result as SqliteResult};
 use uuid::Uuid;
 
 use crate::agent::{AgentMode, AgentType, ModelRegistry};
 use crate::core::services::error::ServiceError;
 use crate::core::ConduitCore;
-use crate::data::{QueuedImageAttachment, QueuedMessage, QueuedMessageMode, SessionTab};
+use crate::data::{
+    QueuedImageAttachment, QueuedMessage, QueuedMessageMode, SessionTab, SessionTabStore,
+};
 
 const INPUT_HISTORY_MAX: usize = 1000;
 
@@ -252,49 +255,64 @@ impl SessionService {
         let session_store = core
             .session_tab_store()
             .ok_or_else(|| ServiceError::Internal("Database not available".to_string()))?;
-
-        if let Some(existing) = session_store
-            .get_by_workspace_id(workspace_id)
-            .map_err(|e| ServiceError::Internal(format!("Failed to query session: {}", e)))?
-        {
-            if !existing.is_open {
-                let mut reopened = existing.clone();
-                reopened.is_open = true;
-                reopened.tab_index = session_store.next_tab_index().map_err(|e| {
-                    ServiceError::Internal(format!("Failed to allocate tab index: {}", e))
-                })?;
-                session_store.update(&reopened).map_err(|e| {
-                    ServiceError::Internal(format!("Failed to reopen session: {}", e))
-                })?;
-                return Self::ensure_model(core, session_store, reopened);
-            }
-            return Self::ensure_model(core, session_store, existing);
-        }
-
-        let workspace_store = core
-            .workspace_store()
-            .ok_or_else(|| ServiceError::Internal("Database not available".to_string()))?;
-
-        workspace_store
-            .get_by_id(workspace_id)
-            .map_err(|e| ServiceError::Internal(format!("Failed to get workspace: {}", e)))?
-            .ok_or_else(|| {
-                ServiceError::NotFound(format!("Workspace {} not found", workspace_id))
-            })?;
-
-        let default_agent = core.config().default_agent;
-        let session = SessionTab::new(
-            0,
-            default_agent,
-            Some(workspace_id),
-            None,
-            Some(core.config().default_model_for(default_agent)),
-            None,
-        );
-
         let session = session_store
-            .create_with_next_index(session)
-            .map_err(|e| ServiceError::Internal(format!("Failed to create session: {}", e)))?;
+            .with_immediate_transaction(|conn| {
+                if let Some(existing) =
+                    SessionTabStore::get_open_by_workspace_id_with_conn(conn, workspace_id)?
+                {
+                    return Self::ensure_model_with_conn(core, conn, existing);
+                }
+
+                if let Some(existing) =
+                    SessionTabStore::get_by_workspace_id_with_conn(conn, workspace_id)?
+                {
+                    if !existing.is_open {
+                        let mut reopened = existing.clone();
+                        reopened.is_open = true;
+                        reopened.tab_index = SessionTabStore::next_tab_index_with_conn(conn)?;
+                        SessionTabStore::update_with_conn(conn, &reopened)?;
+                        return Self::ensure_model_with_conn(core, conn, reopened);
+                    }
+                    return Self::ensure_model_with_conn(core, conn, existing);
+                }
+
+                // Ensure workspace exists before creating a new session.
+                conn.query_row(
+                    "SELECT 1 FROM workspaces WHERE id = ?1",
+                    params![workspace_id.to_string()],
+                    |_| Ok(()),
+                )?;
+
+                let default_agent = core.config().default_agent;
+                let session = SessionTab::new(
+                    0,
+                    default_agent,
+                    Some(workspace_id),
+                    None,
+                    Some(core.config().default_model_for(default_agent)),
+                    None,
+                );
+
+                match SessionTabStore::create_with_next_index_with_conn(conn, session) {
+                    Ok(created) => Ok(created),
+                    Err(err) if is_unique_violation(&err) => {
+                        if let Some(existing) =
+                            SessionTabStore::get_open_by_workspace_id_with_conn(conn, workspace_id)?
+                        {
+                            Ok(existing)
+                        } else {
+                            Err(err)
+                        }
+                    }
+                    Err(err) => Err(err),
+                }
+            })
+            .map_err(|e| match e {
+                SqliteError::QueryReturnedNoRows => {
+                    ServiceError::NotFound(format!("Workspace {} not found", workspace_id))
+                }
+                _ => ServiceError::Internal(format!("Failed to get or create session: {}", e)),
+            })?;
 
         Ok(session)
     }
@@ -312,6 +330,20 @@ impl SessionService {
         store.update(&session).map_err(|e| {
             ServiceError::Internal(format!("Failed to update session model: {}", e))
         })?;
+        Ok(session)
+    }
+
+    fn ensure_model_with_conn(
+        core: &ConduitCore,
+        conn: &rusqlite::Connection,
+        mut session: SessionTab,
+    ) -> SqliteResult<SessionTab> {
+        if session.model.is_some() {
+            return Ok(session);
+        }
+
+        session.model = Some(core.config().default_model_for(session.agent_type));
+        SessionTabStore::update_with_conn(conn, &session)?;
         Ok(session)
     }
 
@@ -482,4 +514,12 @@ impl SessionService {
 
         Ok(session.input_history)
     }
+}
+
+fn is_unique_violation(err: &SqliteError) -> bool {
+    matches!(
+        err,
+        SqliteError::SqliteFailure(db_err, _)
+            if matches!(db_err.code, ErrorCode::ConstraintViolation)
+    )
 }

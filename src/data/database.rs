@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS session_tabs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_tabs_order ON session_tabs(tab_index);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_tabs_open_workspace
+    ON session_tabs(workspace_id)
+    WHERE is_open = 1 AND workspace_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS fork_seeds (
     id TEXT PRIMARY KEY,
@@ -488,6 +491,42 @@ CREATE TABLE IF NOT EXISTS fork_seeds_new (
             "UPDATE repositories SET workspace_mode = 'worktree' WHERE workspace_mode IS NULL",
             [],
         )?;
+
+        // Migration 12: Enforce at most one open session per workspace
+        let has_open_workspace_index: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_session_tabs_open_workspace'",
+                [],
+                |row| row.get::<_, i64>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+
+        if !has_open_workspace_index {
+            // Close duplicate open sessions, keeping the newest per workspace.
+            conn.execute_batch(
+                r#"
+WITH ranked AS (
+    SELECT id,
+           ROW_NUMBER() OVER (
+               PARTITION BY workspace_id
+               ORDER BY datetime(created_at) DESC, id DESC
+           ) AS rn
+    FROM session_tabs
+    WHERE is_open = 1 AND workspace_id IS NOT NULL
+)
+UPDATE session_tabs
+SET is_open = 0
+WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+"#,
+            )?;
+
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_session_tabs_open_workspace
+                 ON session_tabs(workspace_id)
+                 WHERE is_open = 1 AND workspace_id IS NOT NULL",
+                [],
+            )?;
+        }
 
         Ok(())
     }
