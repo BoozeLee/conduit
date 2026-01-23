@@ -42,6 +42,7 @@ import {
 } from './hooks';
 import type { Repository, Workspace, Session, SessionEvent, AgentEvent, WorkspaceMode } from './types';
 import { supportsPlanMode } from './lib/agentCapabilities';
+import { copyText } from './lib/clipboard';
 import { cn } from './lib/cn';
 
 // Create a client
@@ -623,7 +624,7 @@ function AppContent() {
       return;
     }
     try {
-      await navigator.clipboard.writeText(activeWorkspace.path);
+      await copyText(activeWorkspace.path);
       showNotice(`Copied workspace path: ${activeWorkspace.path}`);
     } catch (err) {
       console.error('Failed to copy workspace path', err);

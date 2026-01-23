@@ -1,5 +1,6 @@
 import { X, Copy, FileText, Loader2, AlertTriangle } from 'lucide-react';
 import { cn } from '../lib/cn';
+import { copyText } from '../lib/clipboard';
 import { MarkdownBody } from './markdown';
 import { CodeBlock } from './markdown/CodeBlock';
 import { useFileContent } from '../hooks/useApi';
@@ -74,7 +75,7 @@ export function FileViewer({ filePath, workspaceId, onClose }: FileViewerProps) 
 
   const handleCopyPath = async () => {
     try {
-      await navigator.clipboard.writeText(filePath);
+      await copyText(filePath);
     } catch (err) {
       console.error('Failed to copy path', err);
     }
