@@ -31,6 +31,8 @@ conduit --data-dir ~/my-conduit-data
 Conduit uses the following environment variables:
 - `HOME` — For default data directory location
 - `PATH` — For finding agent binaries
+- `CONDUIT_REPRO_MODE` — Set to `record` or `replay` to enable repro recording/replay
+- `CONDUIT_REPRO_CONTINUE_LIVE` — If `CONDUIT_REPRO_MODE=replay`, set to `1` to switch back to live mode after startup replay
 
 ## Data Directory
 
@@ -40,3 +42,4 @@ The data directory contains:
 - `logs/` — Application logs
 - `workspaces/` — Workspace data
 - `themes/` — Custom themes
+- `repro/` — Repro bundle artifacts (tape + metadata)

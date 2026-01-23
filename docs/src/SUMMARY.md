@@ -54,6 +54,7 @@
 - [conduit](./commands/conduit.md)
 - [debug-keys](./commands/debug-keys.md)
 - [migrate-theme](./commands/migrate-theme.md)
+- [repro](./commands/repro.md)
 
 # Git Integration
 
@@ -66,6 +67,7 @@
 - [Token Usage & Cost](./advanced/tokens-cost.md)
 - [Session Import](./advanced/session-import.md)
 - [Data Storage](./advanced/data-storage.md)
+- [Repro Bundles](./advanced/repro-bundles.md)
 - [Troubleshooting](./advanced/troubleshooting.md)
 
 # Reference
