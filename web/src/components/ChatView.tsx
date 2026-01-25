@@ -206,6 +206,7 @@ export function ChatView({
   const reproControl = useReproControl();
   const [reproSeekInput, setReproSeekInput] = useState('');
   const [showReplayEvents, setShowReplayEvents] = useState(false);
+  const [showRecordedHistory, setShowRecordedHistory] = useState(true);
   const isReplayMode = reproState?.mode === 'replay';
   const { data: reproEvents } = useReproEvents(session?.id, {
     enabled: isReplayMode && showReplayEvents,
@@ -225,7 +226,9 @@ export function ChatView({
     workspace: workspace ?? null,
     onForkedSession,
   });
-  const { data: inputHistory } = useSessionHistory(session?.id ?? null);
+  const { data: inputHistory } = useSessionHistory(session?.id ?? null, {
+    enabled: showRecordedHistory,
+  });
   const { data: queueData } = useSessionQueue(session?.id ?? null);
   const queuedMessages = queueData?.messages ?? [];
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
@@ -260,6 +263,14 @@ export function ChatView({
   const escTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (isReplayMode) {
+      setShowRecordedHistory(false);
+    } else {
+      setShowRecordedHistory(true);
+    }
+  }, [isReplayMode]);
+
+  useEffect(() => {
     sessionIdRef.current = session?.id ?? null;
   }, [session?.id]);
 
@@ -268,6 +279,7 @@ export function ChatView({
   historyLengthRef.current = historyEvents.length;
   const hasMoreHistory = historyOffset > 0;
   const refreshHistoryTail = useCallback(async () => {
+    if (!showRecordedHistory) return;
     const currentSessionId = session?.id ?? null;
     if (!currentSessionId) return;
     if (historyLengthRef.current > historyLimit && !isPinnedToBottom.current) return;
@@ -289,7 +301,7 @@ export function ChatView({
     } catch {
       console.debug('Failed to refresh history tail');
     }
-  }, [session?.id, historyLimit]);
+  }, [session?.id, historyLimit, showRecordedHistory]);
 
   useEffect(() => {
     let isActive = true;
@@ -298,6 +310,13 @@ export function ChatView({
     setHistoryOffset(0);
     setIsLoadingMore(false);
     setHistoryRawEvents([]);
+
+    if (!showRecordedHistory) {
+      setIsLoadingHistory(false);
+      return () => {
+        isActive = false;
+      };
+    }
 
     if (!session?.id) {
       setIsLoadingHistory(false);
@@ -333,9 +352,10 @@ export function ChatView({
     return () => {
       isActive = false;
     };
-  }, [session?.id, historyLimit]);
+  }, [session?.id, historyLimit, showRecordedHistory]);
 
   const loadMoreHistory = useCallback(async () => {
+    if (!showRecordedHistory) return;
     const currentSessionId = session?.id ?? null;
     if (!currentSessionId || isLoadingMore || historyOffset === 0) return;
 
@@ -365,7 +385,7 @@ export function ChatView({
     } finally {
       setIsLoadingMore(false);
     }
-  }, [historyLimit, historyOffset, isLoadingMore, session?.id]);
+  }, [historyLimit, historyOffset, isLoadingMore, session?.id, showRecordedHistory]);
 
   useLayoutEffect(() => {
     if (!pendingScrollAdjustment.current || !scrollContainerRef.current) return;
@@ -1476,6 +1496,15 @@ export function ChatView({
               )}
             >
               {showReplayEvents ? 'Hide events' : 'Show events'}
+            </button>
+            <button
+              onClick={() => setShowRecordedHistory((prev) => !prev)}
+              className={cn(
+                'rounded-md border border-border px-2 py-1 text-xs text-text',
+                'hover:bg-surface-elevated'
+              )}
+            >
+              {showRecordedHistory ? 'Hide recorded history' : 'Show recorded history'}
             </button>
             <button
               onClick={handleReplayStep}
