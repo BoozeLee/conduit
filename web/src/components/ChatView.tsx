@@ -200,7 +200,7 @@ export function ChatView({
   const forceScrollToBottom = useRef(false);
   const scrollStateBySession = useRef<Record<string, { top: number; pinned: boolean }>>({});
   const scrollSessionId = useRef<string | null>(null);
-  const { sendPrompt, respondToControl, stopSession } = useWebSocket();
+  const { sendPrompt, respondToControl, stopSession, startSession } = useWebSocket();
   const wsEvents = useSessionEvents(session?.id ?? null);
   const { data: reproState } = useReproState();
   const reproControl = useReproControl();
@@ -232,6 +232,7 @@ export function ChatView({
   const { data: queueData } = useSessionQueue(session?.id ?? null);
   const queuedMessages = queueData?.messages ?? [];
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
+  const replayStartedSessions = useRef<Set<string>>(new Set());
   const addQueueMutation = useAddQueueMessage();
   const updateQueueMutation = useUpdateQueueMessage();
   const deleteQueueMutation = useDeleteQueueMessage();
@@ -865,6 +866,20 @@ export function ChatView({
       clearAttachments(session.id);
     };
   }, [session?.id]);
+
+  useEffect(() => {
+    if (!isReplayMode || !session || !workspace) return;
+    if (replayStartedSessions.current.has(session.id)) return;
+
+    startSession(
+      session.id,
+      '',
+      workspace.path,
+      session.model_invalid ? undefined : session.model ?? undefined,
+      true
+    );
+    replayStartedSessions.current.add(session.id);
+  }, [isReplayMode, session, workspace, startSession]);
 
   const sendWithAttachments = async (message: string) => {
     if (!session || !workspace) return;
