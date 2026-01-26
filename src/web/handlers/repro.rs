@@ -110,6 +110,23 @@ pub async fn get_repro_events(
     let limit = query.limit.unwrap_or(200).min(2000);
     let session_id = query.session_id.as_deref();
 
+    let mut unique_session_ids: Vec<&str> = tape
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            ReproTapeEntry::AgentEvent { session_id, .. }
+            | ReproTapeEntry::AgentInput { session_id, .. } => Some(session_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    unique_session_ids.sort();
+    unique_session_ids.dedup();
+    let fallback_session = if session_id.is_some() && unique_session_ids.len() == 1 {
+        Some(unique_session_ids[0])
+    } else {
+        None
+    };
+
     let mut events: Vec<ReproEventSummary> = tape
         .entries
         .iter()
@@ -120,7 +137,9 @@ pub async fn get_repro_events(
                 session_id: entry_session,
                 event,
             } => {
-                if session_id.is_some_and(|id| id != entry_session) {
+                if session_id.is_some_and(|id| id != entry_session)
+                    && fallback_session.is_none_or(|fallback| fallback != entry_session)
+                {
                     return None;
                 }
                 Some(ReproEventSummary {
@@ -137,7 +156,9 @@ pub async fn get_repro_events(
                 session_id: entry_session,
                 input,
             } => {
-                if session_id.is_some_and(|id| id != entry_session) {
+                if session_id.is_some_and(|id| id != entry_session)
+                    && fallback_session.is_none_or(|fallback| fallback != entry_session)
+                {
                     return None;
                 }
                 let (kind, detail) = input_detail(input);

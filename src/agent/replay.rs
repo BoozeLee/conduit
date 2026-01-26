@@ -27,7 +27,8 @@ impl ReplayAgentRunner {
     }
 
     fn events_for_session(&self) -> Vec<(u64, AgentEvent)> {
-        self.tape
+        let mut events: Vec<(u64, AgentEvent)> = self
+            .tape
             .entries
             .iter()
             .filter_map(|entry| match entry {
@@ -39,7 +40,44 @@ impl ReplayAgentRunner {
                 } if session_id == &self.session_id => Some((*seq, event.clone())),
                 _ => None,
             })
-            .collect()
+            .collect();
+
+        if !events.is_empty() {
+            return events;
+        }
+
+        let mut unique_session_ids = self
+            .tape
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ReproTapeEntry::AgentEvent { session_id, .. }
+                | ReproTapeEntry::AgentInput { session_id, .. } => Some(session_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        unique_session_ids.sort();
+        unique_session_ids.dedup();
+
+        if unique_session_ids.len() == 1 {
+            let fallback = unique_session_ids[0];
+            events = self
+                .tape
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    ReproTapeEntry::AgentEvent {
+                        seq,
+                        session_id,
+                        event,
+                        ..
+                    } if session_id == fallback => Some((*seq, event.clone())),
+                    _ => None,
+                })
+                .collect();
+        }
+
+        events
     }
 }
 
