@@ -266,6 +266,10 @@ async fn run_repro(command: ReproCommands, data_dir: Option<PathBuf>) -> Result<
                     pause_at_seq = resolve_pause_before(tape, kind);
                 }
             }
+            if pause_at_seq.is_none() && matches!(ui, ReproRunUiArg::Web) {
+                // Start paused for web replay so stepping works before auto-play consumes events.
+                pause_at_seq = Some(0);
+            }
             conduit::repro::runtime::set_mode(conduit::repro::runtime::ReproMode::Replay {
                 continue_live,
             });
