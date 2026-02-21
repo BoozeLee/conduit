@@ -71,7 +71,7 @@ conduit
 On first launch, Conduit will:
 
 1. **Detect Git** — Shows an error dialog if Git is not found
-2. **Detect Agents** — Searches for `claude`, `codex`, and `gemini` binaries
+2. **Detect Agents** — Searches for `codex`, `claude`, and `gemini` binaries
 3. **Create Config Directory** — Creates `~/.conduit/` for settings and data
 
 If no agents are found, you'll be prompted to configure tool paths in the settings.

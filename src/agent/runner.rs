@@ -115,6 +115,16 @@ impl AgentMode {
 }
 
 impl AgentType {
+    /// Preferred provider priority order used for defaults and UI listing.
+    pub const fn preferred_order() -> [AgentType; 4] {
+        [
+            AgentType::Codex,
+            AgentType::Claude,
+            AgentType::Gemini,
+            AgentType::Opencode,
+        ]
+    }
+
     pub fn supports_plan_mode(&self) -> bool {
         matches!(
             self,

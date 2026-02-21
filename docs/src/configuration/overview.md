@@ -21,7 +21,7 @@ The file is created automatically on first run with default values.
 
 ```toml
 # Default agent
-default_agent = "claude"
+default_agent = "codex"
 
 # Token display
 show_token_usage = true
@@ -33,7 +33,7 @@ name = "catppuccin-mocha"
 
 # Custom tool paths
 [tools]
-claude = "/opt/homebrew/bin/claude"
+codex = "/opt/homebrew/bin/codex"
 ```
 
 ## Reloading Config

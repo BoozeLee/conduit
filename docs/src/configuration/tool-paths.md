@@ -7,8 +7,8 @@ Configure paths to external tools.
 Conduit searches your `PATH` for:
 - `git` — Required
 - `gh` — GitHub CLI (optional)
-- `claude` — Claude Code agent
 - `codex` — Codex CLI agent
+- `claude` — Claude Code agent
 - `gemini` — Gemini CLI agent
 
 ## Custom Paths
@@ -19,8 +19,8 @@ If tools aren't in your PATH, specify them:
 [tools]
 git = "/usr/bin/git"
 gh = "/usr/local/bin/gh"
-claude = "/opt/homebrew/bin/claude"
 codex = "/home/user/.local/bin/codex"
+claude = "/opt/homebrew/bin/claude"
 gemini = "/home/user/.local/bin/gemini"
 ```
 
@@ -30,7 +30,7 @@ Check tool detection:
 
 ```bash
 # Should show tool locations
-which claude codex gemini git gh
+which codex claude gemini git gh
 ```
 
 ## Missing Tools

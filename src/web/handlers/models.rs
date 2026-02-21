@@ -29,13 +29,13 @@ pub async fn set_default_model(
     Json(payload): Json<SetDefaultModelRequest>,
 ) -> Result<StatusCode, WebError> {
     let agent_type = match payload.agent_type.to_lowercase().as_str() {
-        "claude" => AgentType::Claude,
         "codex" => AgentType::Codex,
+        "claude" => AgentType::Claude,
         "gemini" => AgentType::Gemini,
         "opencode" => AgentType::Opencode,
         _ => {
             return Err(WebError::BadRequest(format!(
-                "Invalid agent type: {}. Must be one of: claude, codex, gemini, opencode",
+                "Invalid agent type: {}. Must be one of: codex, claude, gemini, opencode",
                 payload.agent_type
             )));
         }

@@ -41,32 +41,48 @@ impl Default for AgentSelectorState {
 }
 
 impl AgentSelectorState {
+    fn option_for(agent_type: AgentType) -> AgentOption {
+        match agent_type {
+            AgentType::Codex => AgentOption {
+                agent_type: AgentType::Codex,
+                name: "Codex CLI",
+                description: "OpenAI's code generation model",
+            },
+            AgentType::Claude => AgentOption {
+                agent_type: AgentType::Claude,
+                name: "Claude Code",
+                description: "Anthropic's coding assistant",
+            },
+            AgentType::Gemini => AgentOption {
+                agent_type: AgentType::Gemini,
+                name: "Gemini CLI",
+                description: "Google's Gemini coding assistant",
+            },
+            AgentType::Opencode => AgentOption {
+                agent_type: AgentType::Opencode,
+                name: "OpenCode",
+                description: "OpenCode multi-provider assistant",
+            },
+        }
+    }
+
+    fn tool_for(agent_type: AgentType) -> Tool {
+        match agent_type {
+            AgentType::Codex => Tool::Codex,
+            AgentType::Claude => Tool::Claude,
+            AgentType::Gemini => Tool::Gemini,
+            AgentType::Opencode => Tool::Opencode,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             visible: false,
             selected: 0,
-            agents: vec![
-                AgentOption {
-                    agent_type: AgentType::Claude,
-                    name: "Claude Code",
-                    description: "Anthropic's coding assistant",
-                },
-                AgentOption {
-                    agent_type: AgentType::Codex,
-                    name: "Codex CLI",
-                    description: "OpenAI's code generation model",
-                },
-                AgentOption {
-                    agent_type: AgentType::Gemini,
-                    name: "Gemini CLI",
-                    description: "Google's Gemini coding assistant",
-                },
-                AgentOption {
-                    agent_type: AgentType::Opencode,
-                    name: "OpenCode",
-                    description: "OpenCode multi-provider assistant",
-                },
-            ],
+            agents: AgentType::preferred_order()
+                .into_iter()
+                .map(Self::option_for)
+                .collect(),
         }
     }
 
@@ -74,36 +90,10 @@ impl AgentSelectorState {
     pub fn with_available_agents(tools: &ToolAvailability) -> Self {
         let mut agents = Vec::new();
 
-        if tools.is_available(Tool::Claude) {
-            agents.push(AgentOption {
-                agent_type: AgentType::Claude,
-                name: "Claude Code",
-                description: "Anthropic's coding assistant",
-            });
-        }
-
-        if tools.is_available(Tool::Codex) {
-            agents.push(AgentOption {
-                agent_type: AgentType::Codex,
-                name: "Codex CLI",
-                description: "OpenAI's code generation model",
-            });
-        }
-
-        if tools.is_available(Tool::Gemini) {
-            agents.push(AgentOption {
-                agent_type: AgentType::Gemini,
-                name: "Gemini CLI",
-                description: "Google's Gemini coding assistant",
-            });
-        }
-
-        if tools.is_available(Tool::Opencode) {
-            agents.push(AgentOption {
-                agent_type: AgentType::Opencode,
-                name: "OpenCode",
-                description: "OpenCode multi-provider assistant",
-            });
+        for agent_type in AgentType::preferred_order() {
+            if tools.is_available(Self::tool_for(agent_type)) {
+                agents.push(Self::option_for(agent_type));
+            }
         }
 
         // If no agents available (shouldn't happen if startup validation passed),
@@ -123,36 +113,10 @@ impl AgentSelectorState {
     pub fn update_available_agents(&mut self, tools: &ToolAvailability) {
         let mut agents = Vec::new();
 
-        if tools.is_available(Tool::Claude) {
-            agents.push(AgentOption {
-                agent_type: AgentType::Claude,
-                name: "Claude Code",
-                description: "Anthropic's coding assistant",
-            });
-        }
-
-        if tools.is_available(Tool::Codex) {
-            agents.push(AgentOption {
-                agent_type: AgentType::Codex,
-                name: "Codex CLI",
-                description: "OpenAI's code generation model",
-            });
-        }
-
-        if tools.is_available(Tool::Gemini) {
-            agents.push(AgentOption {
-                agent_type: AgentType::Gemini,
-                name: "Gemini CLI",
-                description: "Google's Gemini coding assistant",
-            });
-        }
-
-        if tools.is_available(Tool::Opencode) {
-            agents.push(AgentOption {
-                agent_type: AgentType::Opencode,
-                name: "OpenCode",
-                description: "OpenCode multi-provider assistant",
-            });
+        for agent_type in AgentType::preferred_order() {
+            if tools.is_available(Self::tool_for(agent_type)) {
+                agents.push(Self::option_for(agent_type));
+            }
         }
 
         // Only update if we have at least one agent

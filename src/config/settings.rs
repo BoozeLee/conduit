@@ -183,7 +183,7 @@ pub struct TomlProvidersConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_agent: AgentType::Claude,
+            default_agent: AgentType::Codex,
             default_model: None,
             enabled_providers: None,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -794,12 +794,7 @@ impl Config {
     /// - If providers are configured in config, only those providers are considered enabled.
     /// - If not configured, all installed providers are enabled.
     pub fn effective_enabled_providers(&self, tools: &ToolAvailability) -> Vec<AgentType> {
-        let all = [
-            AgentType::Claude,
-            AgentType::Codex,
-            AgentType::Gemini,
-            AgentType::Opencode,
-        ];
+        let all = AgentType::preferred_order();
 
         let configured = self.enabled_providers.clone();
         all.into_iter()

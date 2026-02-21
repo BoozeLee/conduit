@@ -118,37 +118,25 @@ impl ModelSelectorState {
                 .is_none_or(|providers| providers.contains(&agent_type))
         };
 
-        // Claude Code section
-        if is_allowed(AgentType::Claude) {
-            items.push(ModelSelectorItem::SectionHeader(AgentType::Claude));
-            for model in ModelRegistry::claude_models() {
-                items.push(ModelSelectorItem::Model(model));
+        for agent_type in AgentType::preferred_order() {
+            if !is_allowed(agent_type) {
+                continue;
             }
-        }
 
-        // Codex section
-        if is_allowed(AgentType::Codex) {
-            items.push(ModelSelectorItem::SectionHeader(AgentType::Codex));
-            for model in ModelRegistry::codex_models() {
-                items.push(ModelSelectorItem::Model(model));
+            let models = match agent_type {
+                AgentType::Claude => ModelRegistry::claude_models(),
+                AgentType::Codex => ModelRegistry::codex_models(),
+                AgentType::Gemini => ModelRegistry::gemini_models(),
+                AgentType::Opencode => ModelRegistry::opencode_models(),
+            };
+
+            if models.is_empty() {
+                continue;
             }
-        }
 
-        // Gemini section
-        if is_allowed(AgentType::Gemini) {
-            items.push(ModelSelectorItem::SectionHeader(AgentType::Gemini));
-            for model in ModelRegistry::gemini_models() {
+            items.push(ModelSelectorItem::SectionHeader(agent_type));
+            for model in models {
                 items.push(ModelSelectorItem::Model(model));
-            }
-        }
-
-        if is_allowed(AgentType::Opencode) {
-            let opencode_models = ModelRegistry::opencode_models();
-            if !opencode_models.is_empty() {
-                items.push(ModelSelectorItem::SectionHeader(AgentType::Opencode));
-                for model in opencode_models {
-                    items.push(ModelSelectorItem::Model(model));
-                }
             }
         }
 

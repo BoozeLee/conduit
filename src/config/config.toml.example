@@ -37,8 +37,8 @@
 # Configure the single default agent + model used for new sessions.
 #
 # [model]
-# agent = "claude"
-# model = "opus"
+# agent = "codex"
+# model = "gpt-5.3-codex"
 
 # ============================================================================
 # Providers
@@ -47,7 +47,7 @@
 # If omitted, all installed providers are enabled by default.
 #
 # [providers]
-# enabled = ["claude", "codex", "gemini", "opencode"]
+# enabled = ["codex", "claude", "gemini", "opencode"]
 
 # ============================================================================
 # Tool Paths

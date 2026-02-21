@@ -5,8 +5,8 @@ Complete reference for `~/.conduit/config.toml`.
 ## Application Settings
 
 ```toml
-# Default agent: "claude", "codex", or "gemini"
-default_agent = "claude"
+# Default agent: "codex", "claude", "gemini", or "opencode"
+default_agent = "codex"
 
 # Working directory for agents (defaults to current directory)
 # working_dir = "/path/to/default"
@@ -51,7 +51,7 @@ gemini = "/usr/local/bin/gemini"
 
 ```toml
 [providers]
-enabled = ["claude", "codex", "gemini", "opencode"]
+enabled = ["codex", "claude", "gemini", "opencode"]
 ```
 
 If omitted, all installed providers are enabled by default.

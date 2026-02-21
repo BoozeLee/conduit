@@ -77,14 +77,14 @@ async fn list_agents(State(state): State<WebAppState>) -> Json<AgentsResponse> {
     Json(AgentsResponse {
         agents: vec![
             AgentInfo {
-                id: "claude",
-                name: "Claude Code",
-                available: tools.is_available(Tool::Claude),
-            },
-            AgentInfo {
                 id: "codex",
                 name: "Codex CLI",
                 available: tools.is_available(Tool::Codex),
+            },
+            AgentInfo {
+                id: "claude",
+                name: "Claude Code",
+                available: tools.is_available(Tool::Claude),
             },
             AgentInfo {
                 id: "gemini",
@@ -228,6 +228,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let ids: Vec<&str> = json["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect();
+        assert_eq!(ids, vec!["codex", "claude", "gemini", "opencode"]);
     }
 
     #[tokio::test]

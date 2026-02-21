@@ -263,12 +263,12 @@ fn unique_workspace_name(base: &str, existing: &[String]) -> String {
 
 fn parse_agent_type(agent_type: &str) -> Result<AgentType, WebError> {
     match agent_type.to_lowercase().as_str() {
-        "claude" => Ok(AgentType::Claude),
         "codex" => Ok(AgentType::Codex),
+        "claude" => Ok(AgentType::Claude),
         "gemini" => Ok(AgentType::Gemini),
         "opencode" => Ok(AgentType::Opencode),
         _ => Err(WebError::BadRequest(format!(
-            "Invalid agent type: {}. Must be one of: claude, codex, gemini, opencode",
+            "Invalid agent type: {}. Must be one of: codex, claude, gemini, opencode",
             agent_type
         ))),
     }

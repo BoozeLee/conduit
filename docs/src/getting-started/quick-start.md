@@ -45,7 +45,7 @@ Run multiple agents simultaneously:
 2. Use `Alt+1`, `Alt+2`, etc. to switch between tabs
 3. Or use `Alt+Tab` / `Alt+Shift+Tab` to cycle through
 
-Each tab runs independently — you can have Claude working on one task while Codex handles another.
+Each tab runs independently — you can have Codex working on one task while Claude handles another.
 
 ## Toggle Build/Plan Mode
 

@@ -3268,7 +3268,7 @@ impl App {
             .map(|saved| saved.agent_type)
             .unwrap_or_else(|| {
                 self.preferred_provider_for_new_sessions()
-                    .unwrap_or(AgentType::Claude)
+                    .unwrap_or(self.config().default_agent)
             });
 
         let saved_agent_mode = saved_tab.as_ref().map(|saved| {
@@ -3538,13 +3538,7 @@ impl App {
             return Some(default_provider);
         }
 
-        let preferred_order = [
-            AgentType::Claude,
-            AgentType::Codex,
-            AgentType::Gemini,
-            AgentType::Opencode,
-        ];
-        preferred_order
+        AgentType::preferred_order()
             .into_iter()
             .find(|provider| enabled.contains(provider))
     }
@@ -10893,7 +10887,7 @@ mod tests {
             .tab_manager
             .active_session()
             .expect("session missing");
-        assert_eq!(session.agent_type, AgentType::Claude);
+        assert_eq!(session.agent_type, AgentType::Codex);
     }
 
     #[test]

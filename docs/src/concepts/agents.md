@@ -6,8 +6,8 @@ Conduit orchestrates AI coding assistants called **agents**.
 
 | Agent | Provider | Context Window |
 |-------|----------|----------------|
-| [Claude Code](./agents/claude-code.md) | Anthropic | 200K tokens |
 | [Codex CLI](./agents/codex.md) | OpenAI | 272K tokens |
+| [Claude Code](./agents/claude-code.md) | Anthropic | 200K tokens |
 | [Gemini CLI](./agents/gemini.md) | Google | 1M tokens |
 
 ## Selecting an Agent
@@ -15,14 +15,14 @@ Conduit orchestrates AI coding assistants called **agents**.
 The default agent is configured in `~/.conduit/config.toml`:
 
 ```toml
-default_agent = "claude"  # or "codex" or "gemini"
+default_agent = "codex"  # or "claude", "gemini", "opencode"
 ```
 
 ## Agent Detection
 
 On startup, Conduit searches for:
-- `claude` binary (Claude Code)
 - `codex` binary (Codex CLI)
+- `claude` binary (Claude Code)
 - `gemini` binary (Gemini CLI)
 
 Configure custom paths in settings if needed.

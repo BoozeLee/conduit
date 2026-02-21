@@ -133,8 +133,8 @@ async fn run_app() -> Result<()> {
 
     // Check critical requirement: at least one agent
     if !tools.has_any_agent() {
-        // Prefer Claude, but accept any available agent
-        let preferred_agent = Tool::Claude;
+        // Prefer Codex, but accept any available agent
+        let preferred_agent = Tool::Codex;
         match run_blocking_tool_dialog(preferred_agent, &tools)? {
             Some(path) => {
                 // Determine which agent based on path name
@@ -149,7 +149,7 @@ async fn run_app() -> Result<()> {
                 } else if file_name.contains("opencode") {
                     Tool::Opencode
                 } else {
-                    Tool::Claude
+                    preferred_agent
                 };
                 tools.update_tool(tool, path.clone());
                 if let Err(e) = save_tool_path(tool, &path) {

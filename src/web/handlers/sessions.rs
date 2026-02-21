@@ -118,13 +118,13 @@ pub async fn create_session(
 ) -> Result<(StatusCode, Json<SessionResponse>), WebError> {
     // Parse agent type
     let agent_type = match req.agent_type.to_lowercase().as_str() {
-        "claude" => AgentType::Claude,
         "codex" => AgentType::Codex,
+        "claude" => AgentType::Claude,
         "gemini" => AgentType::Gemini,
         "opencode" => AgentType::Opencode,
         _ => {
             return Err(WebError::BadRequest(format!(
-                "Invalid agent type: {}. Must be one of: claude, codex, gemini, opencode",
+                "Invalid agent type: {}. Must be one of: codex, claude, gemini, opencode",
                 req.agent_type
             )));
         }
@@ -167,12 +167,12 @@ pub async fn update_session(
         .as_ref()
         .map(
             |agent_type_str| match agent_type_str.to_lowercase().as_str() {
-                "claude" => Ok(AgentType::Claude),
                 "codex" => Ok(AgentType::Codex),
+                "claude" => Ok(AgentType::Claude),
                 "gemini" => Ok(AgentType::Gemini),
                 "opencode" => Ok(AgentType::Opencode),
                 _ => Err(WebError::BadRequest(format!(
-                    "Invalid agent type: {}. Must be one of: claude, codex, gemini, opencode",
+                    "Invalid agent type: {}. Must be one of: codex, claude, gemini, opencode",
                     agent_type_str
                 ))),
             },

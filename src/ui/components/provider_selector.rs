@@ -19,12 +19,7 @@ impl ProviderSelectorState {
     }
 
     fn all_providers() -> [AgentType; 4] {
-        [
-            AgentType::Claude,
-            AgentType::Codex,
-            AgentType::Gemini,
-            AgentType::Opencode,
-        ]
+        AgentType::preferred_order()
     }
 
     fn provider_tool(provider: AgentType) -> Tool {
