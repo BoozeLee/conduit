@@ -3530,6 +3530,26 @@ impl App {
         }
     }
 
+    fn session_started(session: &AgentSession) -> bool {
+        session.agent_session_id.is_some()
+            || session.resume_session_id.is_some()
+            || session.agent_input_tx.is_some()
+            || session.turn_count > 0
+    }
+
+    fn reject_cross_agent_switch(session: &mut AgentSession, target_agent: AgentType) -> bool {
+        if session.agent_type == target_agent || !Self::session_started(session) {
+            return false;
+        }
+
+        let display = MessageDisplay::Error {
+            content: "Switching agent type after a session has started is not supported. Start a new session/tab to change agents."
+                .to_string(),
+        };
+        session.chat_view.push(display.to_chat_message());
+        true
+    }
+
     fn model_selector_defaults(&self) -> DefaultModelSelection {
         let agent_type = self.config().default_agent;
         DefaultModelSelection {
@@ -4988,6 +5008,9 @@ impl App {
                     }
 
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
+                        if Self::reject_cross_agent_switch(session, model.agent_type) {
+                            return None;
+                        }
                         let agent_changed =
                             session.set_agent_and_model(model.agent_type, Some(model.id.clone()));
 
@@ -9764,7 +9787,7 @@ mod tests {
     use crate::data::{QueuedMessage, QueuedMessageMode};
     use crate::ui::components::MessageRole;
     use crate::ui::session::AgentSession;
-    use crate::util::ToolAvailability;
+    use crate::util::{Tool, ToolAvailability};
     use chrono::Utc;
     use serde_json::json;
     use std::path::PathBuf;
@@ -10639,5 +10662,109 @@ mod tests {
         assert!(!app.state.agent_selector_state.is_visible());
         assert!(app.state.tab_manager.active_session().is_some());
         assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn test_handle_confirm_action_blocks_cross_agent_switch_after_session_started() {
+        let session_id = Uuid::new_v4();
+        let mut app = build_test_app_with_sessions(&[session_id]);
+        let executable = std::env::current_exe().expect("test executable path");
+        assert!(app.tools_mut().update_tool(Tool::Claude, executable));
+
+        {
+            let session = app
+                .state
+                .tab_manager
+                .active_session_mut()
+                .expect("session missing");
+            session.turn_count = 1;
+        }
+
+        app.state
+            .model_selector_state
+            .show(None, DefaultModelSelection::default());
+        app.state.model_selector_state.insert_str("Opus 4.6");
+        app.state.input_mode = InputMode::SelectingModel;
+
+        let mut effects = Vec::new();
+        app.handle_confirm_action(&mut effects).unwrap();
+
+        assert_eq!(app.state.input_mode, InputMode::SelectingModel);
+        assert!(app.state.model_selector_state.is_visible());
+        assert!(effects.is_empty());
+
+        let session = app
+            .state
+            .tab_manager
+            .active_session()
+            .expect("session missing");
+        assert_eq!(session.agent_type, AgentType::Codex);
+        let last = session
+            .chat_view
+            .messages()
+            .last()
+            .expect("expected error message");
+        assert_eq!(last.role, MessageRole::Error);
+        assert!(last
+            .content
+            .contains("Switching agent type after a session has started"));
+    }
+
+    #[test]
+    fn test_handle_model_selector_click_blocks_cross_agent_switch_after_session_started() {
+        let session_id = Uuid::new_v4();
+        let mut app = build_test_app_with_sessions(&[session_id]);
+        let executable = std::env::current_exe().expect("test executable path");
+        assert!(app.tools_mut().update_tool(Tool::Claude, executable));
+
+        {
+            let session = app
+                .state
+                .tab_manager
+                .active_session_mut()
+                .expect("session missing");
+            session.turn_count = 1;
+        }
+
+        app.state
+            .model_selector_state
+            .show(None, DefaultModelSelection::default());
+        app.state.model_selector_state.insert_str("Opus 4.6");
+        app.state.input_mode = InputMode::SelectingModel;
+
+        let terminal_size = crossterm::terminal::size().unwrap_or((80, 24));
+        let dialog_width = 60u16.min(terminal_size.0.saturating_sub(4));
+        let dialog_height = 18u16.min(terminal_size.1.saturating_sub(2));
+        let dialog_x = (terminal_size.0.saturating_sub(dialog_width)) / 2;
+        let dialog_y = (terminal_size.1.saturating_sub(dialog_height)) / 2;
+        let inner = dialog_content_area(Rect {
+            x: dialog_x,
+            y: dialog_y,
+            width: dialog_width,
+            height: dialog_height,
+        });
+        let x = inner.x + 1;
+        let y = inner.y + 3;
+
+        assert!(app.handle_model_selector_click(x, y).is_none());
+
+        assert_eq!(app.state.input_mode, InputMode::SelectingModel);
+        assert!(app.state.model_selector_state.is_visible());
+
+        let session = app
+            .state
+            .tab_manager
+            .active_session()
+            .expect("session missing");
+        assert_eq!(session.agent_type, AgentType::Codex);
+        let last = session
+            .chat_view
+            .messages()
+            .last()
+            .expect("expected error message");
+        assert_eq!(last.role, MessageRole::Error);
+        assert!(last
+            .content
+            .contains("Switching agent type after a session has started"));
     }
 }

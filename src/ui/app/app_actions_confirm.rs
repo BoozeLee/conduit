@@ -50,6 +50,9 @@ impl App {
                         return Ok(());
                     }
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
+                        if Self::reject_cross_agent_switch(session, agent_type) {
+                            return Ok(());
+                        }
                         let agent_changed =
                             session.set_agent_and_model(agent_type, Some(model_id.clone()));
                         let msg = if agent_changed {
