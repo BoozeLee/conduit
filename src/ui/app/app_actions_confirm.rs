@@ -219,6 +219,9 @@ impl App {
                 }
             }
             InputMode::Confirming => {
+                if self.is_archive_progress_dialog() {
+                    return Ok(());
+                }
                 if let Some(context) = self.state.confirmation_dialog_state.context.clone() {
                     match context {
                         ConfirmationContext::SelectWorkspaceMode { repo_id } => {
@@ -248,56 +251,16 @@ impl App {
                                 self.state.confirmation_dialog_state.is_confirm_selected();
                             effects
                                 .push(self.execute_archive_workspace(workspace_id, delete_remote));
-                            self.state.confirmation_dialog_state.hide();
-                            self.state.input_mode = InputMode::SidebarNavigation;
                             return Ok(());
                         }
                         ConfirmationContext::ArchiveWorkspace(id) => {
                             if self.state.confirmation_dialog_state.is_confirm_selected() {
-                                if let Some((workspace, settings, base_path)) =
-                                    self.resolve_workspace_settings(id)
-                                {
-                                    if settings.archive_delete_branch
-                                        && settings.archive_remote_prompt
-                                    {
-                                        let should_prompt = match base_path.as_ref() {
-                                            Some(path) => match self
-                                                .worktree_manager()
-                                                .remote_branch_exists(path, &workspace.branch)
-                                            {
-                                                Ok(true) => true,
-                                                Ok(false) => false,
-                                                Err(err) => {
-                                                    tracing::warn!(
-                                                        error = %err,
-                                                        workspace_id = %workspace.id,
-                                                        branch = %workspace.branch,
-                                                        "Failed to check remote branch existence"
-                                                    );
-                                                    false
-                                                }
-                                            },
-                                            None => false,
-                                        };
-                                        if should_prompt {
-                                            self.prompt_archive_remote_delete(&workspace);
-                                            return Ok(());
-                                        }
-                                    }
-                                } else {
-                                    self.state.confirmation_dialog_state.hide();
-                                    self.show_error(
-                                        "Archive Failed",
-                                        "Workspace or repository not found.",
-                                    );
-                                    return Ok(());
-                                }
-
-                                effects.push(self.execute_archive_workspace(id, false));
-                                self.state.confirmation_dialog_state.hide();
-                                self.state.input_mode = InputMode::SidebarNavigation;
+                                effects.push(self.execute_archive_workspace_preflight(id));
                                 return Ok(());
                             }
+                        }
+                        ConfirmationContext::ArchiveWorkspaceInProgress { .. } => {
+                            return Ok(());
                         }
                         ConfirmationContext::RemoveProject(id) => {
                             if self.state.confirmation_dialog_state.is_confirm_selected() {

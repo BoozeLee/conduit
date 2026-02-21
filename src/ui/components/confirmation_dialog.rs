@@ -56,6 +56,8 @@ pub enum ConfirmationContext {
     SelectWorkspaceMode { repo_id: Uuid },
     /// Confirm whether to delete a remote branch after archive
     ArchiveWorkspaceRemoteDelete { workspace_id: Uuid },
+    /// Archive is currently running; dialog is informational and non-interactive.
+    ArchiveWorkspaceInProgress { workspace_id: Uuid },
 }
 
 impl ConfirmationType {
@@ -128,6 +130,16 @@ impl ConfirmationDialogState {
 
     /// Show the dialog in loading state with a spinner
     pub fn show_loading(&mut self, title: impl Into<String>, loading_message: impl Into<String>) {
+        self.show_loading_with_context(title, loading_message, None);
+    }
+
+    /// Show the dialog in loading state with a spinner and optional context
+    pub fn show_loading_with_context(
+        &mut self,
+        title: impl Into<String>,
+        loading_message: impl Into<String>,
+        context: Option<ConfirmationContext>,
+    ) {
         self.visible = true;
         self.loading = true;
         self.loading_message = loading_message.into();
@@ -136,7 +148,7 @@ impl ConfirmationDialogState {
         self.message = String::new();
         self.warnings = Vec::new();
         self.confirmation_type = ConfirmationType::Info;
-        self.context = None;
+        self.context = context;
     }
 
     /// Advance the spinner animation
@@ -262,10 +274,19 @@ impl Widget for ConfirmationDialog<'_> {
             let dialog_width: u16 = 50;
             let dialog_height: u16 = 7; // Compact: border(2) + top_padding(1) + spinner area
 
+            let instructions = if matches!(
+                self.state.context,
+                Some(ConfirmationContext::ArchiveWorkspaceInProgress { .. })
+            ) {
+                Vec::new()
+            } else {
+                vec![("Esc", "Cancel")]
+            };
+
             // Render dialog frame (instructions on bottom border)
             let frame = DialogFrame::new(&self.state.title, dialog_width, dialog_height)
                 .border_color(Color::Cyan)
-                .instructions(vec![("Esc", "Cancel")]);
+                .instructions(instructions);
             let inner = frame.render(area, buf);
 
             if inner.height < 3 {

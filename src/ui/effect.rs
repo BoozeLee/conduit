@@ -27,6 +27,9 @@ pub enum Effect {
         parent_workspace_id: Uuid,
         base_branch: String,
     },
+    ArchiveWorkspacePreflight {
+        workspace_id: Uuid,
+    },
     ArchiveWorkspace {
         workspace_id: Uuid,
         delete_remote: bool,

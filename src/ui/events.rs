@@ -103,6 +103,12 @@ pub enum AppEvent {
         result: Result<WorkspaceArchived, String>,
     },
 
+    /// Archive preflight completed (remote branch prompt check)
+    ArchiveWorkspacePreflightCompleted {
+        workspace_id: Uuid,
+        result: Result<ArchiveWorkspacePreflightResult, String>,
+    },
+
     /// Project removal completed
     ProjectRemoved { result: RemoveProjectResult },
 
@@ -183,6 +189,11 @@ pub struct ForkWorkspaceCreated {
 pub struct WorkspaceArchived {
     pub workspace_id: Uuid,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchiveWorkspacePreflightResult {
+    pub should_prompt_remote_delete: bool,
 }
 
 #[derive(Debug, Clone)]

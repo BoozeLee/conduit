@@ -435,6 +435,14 @@ impl AppState {
         if self.footer_spinner.is_some() {
             return true;
         }
+        // Loading confirmation dialog spinner is animating
+        if self.confirmation_dialog_state.visible && self.confirmation_dialog_state.loading {
+            return true;
+        }
+        // Session import loading spinner is animating
+        if self.session_import_state.visible && self.session_import_state.loading {
+            return true;
+        }
         // Logo shine on splash screen
         if self.tab_manager.is_empty() {
             return true;
@@ -463,6 +471,9 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
+    use crate::agent::AgentType;
+    use crate::ui::session::AgentSession;
+
     use super::AppState;
 
     #[test]
@@ -511,5 +522,19 @@ mod tests {
         state.command_palette_state.visible = false;
         state.help_dialog_state.visible = true;
         assert!(state.has_active_overlay());
+    }
+
+    #[test]
+    fn needs_animation_tracks_loading_confirmation_dialog() {
+        let mut state = AppState::new(1);
+        state
+            .tab_manager
+            .add_session(AgentSession::new(AgentType::Codex));
+        assert!(!state.needs_animation());
+
+        state
+            .confirmation_dialog_state
+            .show_loading("Archive Workspace", "Archiving workspace...");
+        assert!(state.needs_animation());
     }
 }

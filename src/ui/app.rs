@@ -59,8 +59,8 @@ use crate::ui::components::{
 };
 use crate::ui::effect::Effect;
 use crate::ui::events::{
-    AppEvent, ForkWorkspaceCreated, InputMode, RemoveProjectResult, TitleGeneratedResult, ViewMode,
-    WorkspaceArchived, WorkspaceCreated,
+    AppEvent, ArchiveWorkspacePreflightResult, ForkWorkspaceCreated, InputMode,
+    RemoveProjectResult, TitleGeneratedResult, ViewMode, WorkspaceArchived, WorkspaceCreated,
 };
 use crate::ui::session::AgentSession;
 use crate::ui::terminal_guard::TerminalGuard;
@@ -2520,6 +2520,92 @@ impl App {
                         );
                     });
                 }
+                Effect::ArchiveWorkspacePreflight { workspace_id } => {
+                    let repo_dao = self.repo_dao_clone();
+                    let workspace_dao = self.workspace_dao_clone();
+                    let worktree_manager = self.worktree_manager().clone();
+                    let config = self.config().clone();
+                    let event_tx = self.event_tx.clone();
+
+                    tokio::task::spawn_blocking(move || {
+                        let result: Result<ArchiveWorkspacePreflightResult, String> = (|| {
+                            let workspace_dao = workspace_dao
+                                .ok_or_else(|| "No workspace DAO available".to_string())?;
+                            let workspace = workspace_dao
+                                .get_by_id(workspace_id)
+                                .map_err(|e| format!("Failed to load workspace: {}", e))?
+                                .ok_or_else(|| "Workspace not found".to_string())?;
+
+                            let repo = match repo_dao.as_ref() {
+                                Some(dao) => match dao.get_by_id(workspace.repository_id) {
+                                    Ok(repo) => repo,
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            error = %err,
+                                            workspace_id = %workspace_id,
+                                            "Failed to load repository for archive preflight"
+                                        );
+                                        None
+                                    }
+                                },
+                                None => {
+                                    tracing::warn!(
+                                        workspace_id = %workspace_id,
+                                        "Repository DAO unavailable for archive preflight"
+                                    );
+                                    None
+                                }
+                            };
+
+                            let should_prompt_remote_delete = match repo {
+                                Some(repo) => {
+                                    let settings = resolve_repo_workspace_settings(&config, &repo);
+                                    if settings.archive_delete_branch
+                                        && settings.archive_remote_prompt
+                                    {
+                                        match repo.base_path {
+                                            Some(base_path) => {
+                                                match worktree_manager.remote_branch_exists(
+                                                    &base_path,
+                                                    &workspace.branch,
+                                                ) {
+                                                    Ok(exists) => exists,
+                                                    Err(err) => {
+                                                        tracing::warn!(
+                                                            error = %err,
+                                                            workspace_id = %workspace_id,
+                                                            branch = %workspace.branch,
+                                                            "Failed to check remote branch existence during archive preflight"
+                                                        );
+                                                        false
+                                                    }
+                                                }
+                                            }
+                                            None => false,
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                }
+                                None => false,
+                            };
+
+                            Ok(ArchiveWorkspacePreflightResult {
+                                should_prompt_remote_delete,
+                            })
+                        })(
+                        );
+
+                        send_app_event(
+                            &event_tx,
+                            AppEvent::ArchiveWorkspacePreflightCompleted {
+                                workspace_id,
+                                result,
+                            },
+                            "archive_workspace_preflight_completed",
+                        );
+                    });
+                }
                 Effect::ArchiveWorkspace {
                     workspace_id,
                     delete_remote,
@@ -3891,6 +3977,7 @@ impl App {
             // Sidebar operations return to sidebar navigation
             Some(ConfirmationContext::ArchiveWorkspace(_))
             | Some(ConfirmationContext::ArchiveWorkspaceRemoteDelete { .. })
+            | Some(ConfirmationContext::ArchiveWorkspaceInProgress { .. })
             | Some(ConfirmationContext::RemoveProject(_))
             | Some(ConfirmationContext::SelectWorkspaceMode { .. }) => InputMode::SidebarNavigation,
             // No context: return to Normal if tabs exist, otherwise SidebarNavigation
@@ -3905,8 +3992,50 @@ impl App {
         }
     }
 
+    fn is_archive_progress_dialog(&self) -> bool {
+        self.state.confirmation_dialog_state.loading
+            && matches!(
+                self.state.confirmation_dialog_state.context,
+                Some(ConfirmationContext::ArchiveWorkspaceInProgress { .. })
+            )
+    }
+
+    fn show_archive_progress_dialog(&mut self, workspace_id: uuid::Uuid) {
+        self.state.close_overlays();
+        self.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Archive Workspace",
+                "Archiving workspace...",
+                Some(ConfirmationContext::ArchiveWorkspaceInProgress { workspace_id }),
+            );
+        self.state.input_mode = InputMode::Confirming;
+    }
+
+    fn hide_archive_progress_dialog(&mut self, workspace_id: uuid::Uuid) {
+        let is_matching_archive_progress = self.state.confirmation_dialog_state.loading
+            && matches!(
+                self.state.confirmation_dialog_state.context,
+                Some(ConfirmationContext::ArchiveWorkspaceInProgress {
+                    workspace_id: id
+                }) if id == workspace_id
+            );
+        if is_matching_archive_progress {
+            self.state.confirmation_dialog_state.hide();
+            self.state.input_mode = InputMode::SidebarNavigation;
+        }
+    }
+
     /// Initiate the archive workspace flow - check git status and show confirmation dialog
     fn initiate_archive_workspace(&mut self, workspace_id: uuid::Uuid) {
+        if self.state.busy_workspaces.contains(&workspace_id) {
+            self.state.set_timed_footer_message(
+                "Archive already in progress for this workspace".to_string(),
+                Duration::from_secs(3),
+            );
+            return;
+        }
+
         // Get the workspace
         let Some(workspace_dao) = self.workspace_dao() else {
             return;
@@ -4019,54 +4148,24 @@ impl App {
     }
 
     /// Execute the archive workspace action after confirmation
+    fn execute_archive_workspace_preflight(&mut self, workspace_id: uuid::Uuid) -> Effect {
+        self.mark_workspace_busy(workspace_id);
+        self.show_archive_progress_dialog(workspace_id);
+        Effect::ArchiveWorkspacePreflight { workspace_id }
+    }
+
+    /// Execute the archive workspace action after confirmation
     fn execute_archive_workspace(
         &mut self,
         workspace_id: uuid::Uuid,
         delete_remote: bool,
     ) -> Effect {
         self.mark_workspace_busy(workspace_id);
+        self.show_archive_progress_dialog(workspace_id);
         Effect::ArchiveWorkspace {
             workspace_id,
             delete_remote,
         }
-    }
-
-    fn resolve_workspace_settings(
-        &self,
-        workspace_id: uuid::Uuid,
-    ) -> Option<(
-        crate::data::Workspace,
-        crate::core::RepoWorkspaceSettings,
-        Option<std::path::PathBuf>,
-    )> {
-        let workspace_dao = self.workspace_dao()?;
-        let repo_dao = self.repo_dao()?;
-
-        let workspace = match workspace_dao.get_by_id(workspace_id) {
-            Ok(workspace) => workspace?,
-            Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    workspace_id = %workspace_id,
-                    "Failed to load workspace"
-                );
-                return None;
-            }
-        };
-        let repo = match repo_dao.get_by_id(workspace.repository_id) {
-            Ok(repo) => repo?,
-            Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    repository_id = %workspace.repository_id,
-                    "Failed to load repository"
-                );
-                return None;
-            }
-        };
-        let settings = resolve_repo_workspace_settings(self.config(), &repo);
-        let base_path = repo.base_path.clone();
-        Some((workspace, settings, base_path))
     }
 
     fn prompt_archive_remote_delete(&mut self, workspace: &crate::data::Workspace) {
@@ -4527,6 +4626,9 @@ impl App {
         if self.state.input_mode == InputMode::Confirming
             && self.state.confirmation_dialog_state.visible
         {
+            if self.is_archive_progress_dialog() {
+                return Ok(effects);
+            }
             self.state.input_mode = self.dismiss_confirmation_dialog();
             return Ok(effects);
         }
@@ -5513,11 +5615,53 @@ impl App {
                     }
                 }
             }
+            AppEvent::ArchiveWorkspacePreflightCompleted {
+                workspace_id,
+                result,
+            } => match result {
+                Ok(preflight) => {
+                    if preflight.should_prompt_remote_delete {
+                        self.clear_workspace_busy(workspace_id);
+                        self.hide_archive_progress_dialog(workspace_id);
+
+                        let Some(workspace_dao) = self.workspace_dao() else {
+                            self.show_error("Archive Failed", "Workspace database unavailable.");
+                            return Ok(effects);
+                        };
+
+                        match workspace_dao.get_by_id(workspace_id) {
+                            Ok(Some(workspace)) => {
+                                self.prompt_archive_remote_delete(&workspace);
+                            }
+                            Ok(None) => {
+                                self.show_error("Archive Failed", "Workspace not found.");
+                            }
+                            Err(err) => {
+                                self.show_error(
+                                    "Archive Failed",
+                                    &format!("Failed to load workspace: {}", err),
+                                );
+                            }
+                        }
+                    } else {
+                        effects.push(Effect::ArchiveWorkspace {
+                            workspace_id,
+                            delete_remote: false,
+                        });
+                    }
+                }
+                Err(err) => {
+                    self.clear_workspace_busy(workspace_id);
+                    self.hide_archive_progress_dialog(workspace_id);
+                    self.show_error("Archive Failed", &err);
+                }
+            },
             AppEvent::WorkspaceArchived {
                 workspace_id,
                 result,
             } => {
                 self.clear_workspace_busy(workspace_id);
+                self.hide_archive_progress_dialog(workspace_id);
                 match result {
                     Ok(archived) => {
                         if !archived.warnings.is_empty() {
@@ -5544,6 +5688,13 @@ impl App {
                                 new_selection.min(visible_count - 1);
                         } else {
                             self.state.sidebar_state.tree_state.selected = 0;
+                        }
+
+                        if archived.warnings.is_empty() {
+                            self.state.set_timed_footer_message(
+                                "Workspace archived".to_string(),
+                                Duration::from_secs(3),
+                            );
                         }
                     }
                     Err(err) => {
@@ -10745,8 +10896,16 @@ mod tests {
             effects.as_slice(),
             [Effect::ArchiveWorkspace { workspace_id: id, delete_remote: true }] if *id == workspace_id
         ));
-        assert_eq!(app.state.input_mode, InputMode::SidebarNavigation);
-        assert!(!app.state.confirmation_dialog_state.visible);
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(app.state.confirmation_dialog_state.loading);
+        assert!(matches!(
+            app.state.confirmation_dialog_state.context,
+            Some(ConfirmationContext::ArchiveWorkspaceInProgress {
+                workspace_id: id
+            }) if id == workspace_id
+        ));
+        assert!(app.state.busy_workspaces.contains(&workspace_id));
     }
 
     #[test]
@@ -10766,6 +10925,77 @@ mod tests {
         assert_eq!(app.state.input_mode, InputMode::SidebarNavigation);
         assert!(!app.state.confirmation_dialog_state.visible);
         assert!(app.state.confirmation_dialog_state.context.is_none());
+    }
+
+    #[test]
+    fn test_handle_confirmation_action_archive_workspace_starts_async_preflight() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let workspace_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state.confirmation_dialog_state.visible = true;
+        app.state.confirmation_dialog_state.context =
+            Some(ConfirmationContext::ArchiveWorkspace(workspace_id));
+
+        let mut effects = Vec::new();
+        app.handle_confirmation_action(Action::ConfirmYes, &mut effects)
+            .unwrap();
+
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::ArchiveWorkspacePreflight { workspace_id: id }] if *id == workspace_id
+        ));
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(app.state.confirmation_dialog_state.loading);
+        assert!(matches!(
+            app.state.confirmation_dialog_state.context,
+            Some(ConfirmationContext::ArchiveWorkspaceInProgress {
+                workspace_id: id
+            }) if id == workspace_id
+        ));
+    }
+
+    #[test]
+    fn test_handle_confirmation_action_ignores_archive_confirm_while_loading() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let workspace_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Archive Workspace",
+                "Archiving workspace...",
+                Some(ConfirmationContext::ArchiveWorkspaceInProgress { workspace_id }),
+            );
+
+        let mut effects = Vec::new();
+        app.handle_confirmation_action(Action::ConfirmYes, &mut effects)
+            .unwrap();
+
+        assert!(effects.is_empty());
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(app.state.confirmation_dialog_state.loading);
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+    }
+
+    #[test]
+    fn test_handle_dialog_cancel_keeps_archive_loading_visible() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let workspace_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Archive Workspace",
+                "Archiving workspace...",
+                Some(ConfirmationContext::ArchiveWorkspaceInProgress { workspace_id }),
+            );
+
+        app.handle_dialog_action(Action::Cancel);
+
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(app.state.confirmation_dialog_state.loading);
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
     }
 
     #[test]
@@ -10982,6 +11212,50 @@ mod tests {
         assert_eq!(app.state.input_mode, InputMode::Normal);
         assert!(!app.state.error_dialog_state.is_visible());
         assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn test_handle_confirm_action_archive_workspace_starts_async_preflight() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let workspace_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state.confirmation_dialog_state.visible = true;
+        app.state.confirmation_dialog_state.context =
+            Some(ConfirmationContext::ArchiveWorkspace(workspace_id));
+        app.state.confirmation_dialog_state.select_confirm();
+
+        let mut effects = Vec::new();
+        app.handle_confirm_action(&mut effects).unwrap();
+
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::ArchiveWorkspacePreflight { workspace_id: id }] if *id == workspace_id
+        ));
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(app.state.confirmation_dialog_state.loading);
+    }
+
+    #[test]
+    fn test_handle_confirm_action_ignores_archive_progress_dialog() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let workspace_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Archive Workspace",
+                "Archiving workspace...",
+                Some(ConfirmationContext::ArchiveWorkspaceInProgress { workspace_id }),
+            );
+
+        let mut effects = Vec::new();
+        app.handle_confirm_action(&mut effects).unwrap();
+
+        assert!(effects.is_empty());
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(app.state.confirmation_dialog_state.loading);
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
     }
 
     #[test]

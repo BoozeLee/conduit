@@ -51,6 +51,9 @@ impl App {
                     self.state.input_mode = InputMode::Normal;
                 }
                 InputMode::Confirming => {
+                    if self.is_archive_progress_dialog() {
+                        return;
+                    }
                     self.state.input_mode = self.dismiss_confirmation_dialog();
                 }
                 InputMode::ShowingError => {
