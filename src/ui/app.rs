@@ -1,7 +1,7 @@
 use std::env;
 use std::fs::File;
 use std::io::{self, Write};
-use std::path::{Component, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -2776,53 +2776,10 @@ impl App {
                         }
 
                         let workspaces_dir = crate::util::workspaces_dir();
-                        let repo_name_path = std::path::Path::new(&repo_name);
-                        let mut components = repo_name_path.components();
-                        let is_safe_repo_name =
-                            matches!(components.next(), Some(Component::Normal(_)))
-                                && components.next().is_none();
-                        if !is_safe_repo_name {
-                            errors.push(format!(
-                                "Skipping project folder removal due to unsafe repo name: {}",
-                                repo_name
-                            ));
-                        } else {
-                            let project_workspaces_path = workspaces_dir.join(&repo_name);
-                            match (
-                                std::fs::canonicalize(&workspaces_dir),
-                                std::fs::canonicalize(&project_workspaces_path),
-                            ) {
-                                (Ok(canonical_root), Ok(canonical_project)) => {
-                                    if canonical_project.starts_with(&canonical_root) {
-                                        if let Err(e) = std::fs::remove_dir_all(&canonical_project)
-                                        {
-                                            errors.push(format!(
-                                                "Failed to remove project folder: {}",
-                                                e
-                                            ));
-                                        }
-                                    } else {
-                                        errors.push(format!(
-                                            "Skipping project folder removal outside managed root: {}",
-                                            canonical_project.display()
-                                        ));
-                                    }
-                                }
-                                (Err(e), _) => {
-                                    errors.push(format!(
-                                        "Failed to canonicalize workspaces dir: {}",
-                                        e
-                                    ));
-                                }
-                                (_, Err(e)) => {
-                                    if e.kind() != io::ErrorKind::NotFound {
-                                        errors.push(format!(
-                                            "Failed to canonicalize project folder: {}",
-                                            e
-                                        ));
-                                    }
-                                }
-                            }
+                        if let Some(e) =
+                            crate::util::remove_project_workspaces_dir(&workspaces_dir, &repo_name)
+                        {
+                            errors.push(e);
                         }
 
                         if let Err(e) = repo_dao.delete(repo_id) {
@@ -5607,7 +5564,14 @@ impl App {
                     self.close_tabs_for_workspace(*workspace_id);
                 }
 
-                if !result.errors.is_empty() {
+                let has_errors = !result.errors.is_empty();
+                if has_errors {
+                    tracing::warn!(
+                        repo_id = %result.repo_id,
+                        error_count = result.errors.len(),
+                        errors = ?result.errors,
+                        "Project removal completed with errors"
+                    );
                     self.show_error_with_details(
                         "Project Removal Errors",
                         "Some operations failed during project removal",
@@ -5627,11 +5591,15 @@ impl App {
                     };
                     self.state.sidebar_state.tree_state.selected =
                         new_selection.min(visible_count - 1);
-                    self.state.input_mode = InputMode::SidebarNavigation;
+                    if !has_errors {
+                        self.state.input_mode = InputMode::SidebarNavigation;
+                    }
                 } else {
                     self.state.sidebar_state.tree_state.selected = 0;
                     self.state.show_first_time_splash = true;
-                    self.state.input_mode = InputMode::Normal;
+                    if !has_errors {
+                        self.state.input_mode = InputMode::Normal;
+                    }
                 }
             }
             AppEvent::AgentStarted {
@@ -10884,6 +10852,29 @@ mod tests {
 
         app.handle_overlay_action(Action::ToggleDetails);
 
+        assert!(app.state.error_dialog_state.details_expanded);
+    }
+
+    #[tokio::test]
+    async fn test_project_removed_errors_keep_error_dialog_focused() {
+        let mut app = build_test_app_with_sessions(&[]);
+        app.state.input_mode = InputMode::SidebarNavigation;
+
+        let event = AppEvent::ProjectRemoved {
+            result: RemoveProjectResult {
+                repo_id: Uuid::new_v4(),
+                workspace_ids: Vec::new(),
+                errors: vec!["Failed to canonicalize workspaces dir: not found".to_string()],
+            },
+        };
+
+        let effects = app.handle_app_event(event).await.unwrap();
+        assert!(effects.is_empty());
+        assert!(app.state.error_dialog_state.is_visible());
+        assert!(app.state.error_dialog_state.has_details());
+        assert_eq!(app.state.input_mode, InputMode::ShowingError);
+
+        app.handle_overlay_action(Action::ToggleDetails);
         assert!(app.state.error_dialog_state.details_expanded);
     }
 

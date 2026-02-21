@@ -6,7 +6,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::path::{Component, PathBuf};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::core::resolve_repo_workspace_settings;
@@ -419,43 +419,8 @@ pub async fn remove_repository(
 
     // Delete repository folder (with path safety checks)
     let workspaces_dir = crate::util::workspaces_dir();
-    let repo_name_path = std::path::Path::new(&repo.name);
-    let mut components = repo_name_path.components();
-    let is_safe_repo_name =
-        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
-
-    if !is_safe_repo_name {
-        errors.push(format!(
-            "Skipping project folder removal due to unsafe repo name: {}",
-            repo.name
-        ));
-    } else {
-        let project_workspaces_path = workspaces_dir.join(&repo.name);
-        match (
-            std::fs::canonicalize(&workspaces_dir),
-            std::fs::canonicalize(&project_workspaces_path),
-        ) {
-            (Ok(canonical_root), Ok(canonical_project)) => {
-                if canonical_project.starts_with(&canonical_root) {
-                    if let Err(e) = std::fs::remove_dir_all(&canonical_project) {
-                        errors.push(format!("Failed to remove project folder: {}", e));
-                    }
-                } else {
-                    errors.push(format!(
-                        "Skipping project folder removal outside managed root: {}",
-                        canonical_project.display()
-                    ));
-                }
-            }
-            (Err(e), _) => {
-                errors.push(format!("Failed to canonicalize workspaces dir: {}", e));
-            }
-            (_, Err(e)) => {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    errors.push(format!("Failed to canonicalize project folder: {}", e));
-                }
-            }
-        }
+    if let Some(e) = crate::util::remove_project_workspaces_dir(&workspaces_dir, &repo.name) {
+        errors.push(e);
     }
 
     // Delete repository from DB
