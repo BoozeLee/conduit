@@ -254,6 +254,18 @@ impl CodexCliRunner {
         }
     }
 
+    fn conversation_config(
+        config: &AgentStartConfig,
+    ) -> Option<HashMap<String, serde_json::Value>> {
+        let effort = config.reasoning_effort?;
+        let mut values = HashMap::new();
+        values.insert(
+            "model_reasoning_effort".to_string(),
+            serde_json::Value::String(effort.codex_config_value().to_string()),
+        );
+        Some(values)
+    }
+
     fn convert_event(event: &EventMsg, state: &mut CodexEventState) -> Vec<AgentEvent> {
         match event {
             EventMsg::TurnStarted(_) => {
@@ -801,7 +813,7 @@ impl AgentRunner for CodexCliRunner {
                         cwd: Some(config.working_dir.to_string_lossy().to_string()),
                         approval_policy: Some(Self::approval_policy()),
                         sandbox: Some(Self::sandbox_mode()),
-                        config: None,
+                        config: Self::conversation_config(&config),
                         base_instructions: None,
                         developer_instructions: None,
                         compact_prompt: None,
@@ -823,7 +835,7 @@ impl AgentRunner for CodexCliRunner {
                     cwd: Some(config.working_dir.to_string_lossy().to_string()),
                     approval_policy: Some(Self::approval_policy()),
                     sandbox: Some(Self::sandbox_mode()),
-                    config: None,
+                    config: Self::conversation_config(&config),
                     base_instructions: None,
                     include_apply_patch_tool: None,
                     model_provider: None,
@@ -1051,5 +1063,17 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(items[0], InputItem::Text { .. }));
         assert!(matches!(items[1], InputItem::Image { .. }));
+    }
+
+    #[test]
+    fn test_conversation_config_includes_reasoning_effort() {
+        let config = AgentStartConfig::new("hello", PathBuf::from("/tmp"))
+            .with_reasoning_effort(crate::agent::ReasoningEffort::XHigh);
+
+        let values = CodexCliRunner::conversation_config(&config).expect("expected config");
+        assert_eq!(
+            values.get("model_reasoning_effort"),
+            Some(&serde_json::Value::String("xhigh".to_string()))
+        );
     }
 }

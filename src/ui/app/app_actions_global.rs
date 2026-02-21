@@ -101,6 +101,24 @@ impl App {
                     self.state.input_mode = InputMode::SelectingModel;
                 }
             }
+            Action::ShowReasoningSelector => {
+                if let Some(session) = self.state.tab_manager.active_session() {
+                    let agent_type = session.agent_type;
+                    let reasoning_effort = session.reasoning_effort;
+                    if !Self::reasoning_supported(agent_type) {
+                        self.state.set_timed_footer_message(
+                            "Reasoning effort is not supported for this agent".to_string(),
+                            Duration::from_secs(3),
+                        );
+                    } else {
+                        self.state.close_overlays();
+                        self.state
+                            .reasoning_selector_state
+                            .show(agent_type, reasoning_effort);
+                        self.state.input_mode = InputMode::SelectingReasoning;
+                    }
+                }
+            }
             Action::ShowThemePicker => {
                 self.state.close_overlays();
                 let theme_path = self.config().theme_path.clone();

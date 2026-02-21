@@ -30,6 +30,8 @@ pub enum Action {
     ToggleViewMode,
     /// Show model selector dialog
     ShowModelSelector,
+    /// Show reasoning selector dialog
+    ShowReasoningSelector,
     /// Show theme picker dialog
     ShowThemePicker,
     /// Toggle performance metrics display
@@ -240,6 +242,7 @@ impl Action {
             Action::InterruptAgent => "Interrupt agent",
             Action::ToggleViewMode => "Toggle view mode",
             Action::ShowModelSelector => "Select model",
+            Action::ShowReasoningSelector => "Select reasoning effort",
             Action::ShowThemePicker => "Change theme",
             Action::ToggleMetrics => "Toggle metrics",
             Action::DumpDebugState => "Dump debug state",
@@ -359,6 +362,7 @@ impl Action {
             self,
             Action::NewProject
                 | Action::ShowModelSelector
+                | Action::ShowReasoningSelector
                 | Action::ShowThemePicker
                 | Action::OpenQueueEditor
                 | Action::OpenSessionImport
@@ -384,6 +388,7 @@ impl Action {
                 | Action::InterruptAgent
                 | Action::ToggleViewMode
                 | Action::ShowModelSelector
+                | Action::ShowReasoningSelector
                 | Action::ShowThemePicker
                 | Action::ToggleMetrics
                 | Action::DumpDebugState

@@ -208,6 +208,8 @@ pub enum InputMode {
     AddingRepository,
     /// Selecting model for current session
     SelectingModel,
+    /// Selecting reasoning effort for current session
+    SelectingReasoning,
     /// Selecting theme
     SelectingTheme,
     /// Setting base projects directory

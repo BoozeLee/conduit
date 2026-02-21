@@ -67,6 +67,40 @@ impl App {
                 self.state.model_selector_state.hide();
                 self.state.input_mode = InputMode::Normal;
             }
+            InputMode::SelectingReasoning => {
+                if let Some(option) = self.state.reasoning_selector_state.selected_option() {
+                    if let Some(session) = self.state.tab_manager.active_session_mut() {
+                        if !App::reasoning_supported(session.agent_type) {
+                            let display = MessageDisplay::Error {
+                                content: "Reasoning effort is not supported for this agent."
+                                    .to_string(),
+                            };
+                            session.chat_view.push(display.to_chat_message());
+                            return Ok(());
+                        }
+                        if App::session_started(session) {
+                            let display = MessageDisplay::Error {
+                                content: "Changing reasoning effort after a session has started is not supported. Start a new session/tab."
+                                    .to_string(),
+                            };
+                            session.chat_view.push(display.to_chat_message());
+                            return Ok(());
+                        }
+
+                        session.set_reasoning_effort(option.effort);
+                        let msg = match option.effort {
+                            Some(effort) => {
+                                format!("Reasoning effort set to: {}", effort.display_name())
+                            }
+                            None => "Reasoning effort set to: Auto".to_string(),
+                        };
+                        let display = MessageDisplay::System { content: msg };
+                        session.chat_view.push(display.to_chat_message());
+                    }
+                }
+                self.state.reasoning_selector_state.hide();
+                self.state.input_mode = InputMode::Normal;
+            }
             InputMode::SelectingTheme => {
                 effects.extend(self.confirm_theme_picker()?);
             }

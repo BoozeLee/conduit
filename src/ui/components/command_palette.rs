@@ -112,6 +112,7 @@ impl CommandPaletteState {
             Action::InterruptAgent,
             Action::ToggleViewMode,
             Action::ShowModelSelector,
+            Action::ShowReasoningSelector,
             Action::ToggleMetrics,
             Action::DumpDebugState,
             Action::OpenQueueEditor,

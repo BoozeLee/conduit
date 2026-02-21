@@ -27,6 +27,51 @@ pub enum AgentMode {
     Plan,
 }
 
+/// Provider-agnostic reasoning effort profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl ReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReasoningEffort::Minimal => "minimal",
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+            ReasoningEffort::XHigh => "xhigh",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ReasoningEffort::Minimal => "Minimal",
+            ReasoningEffort::Low => "Low",
+            ReasoningEffort::Medium => "Medium",
+            ReasoningEffort::High => "High",
+            ReasoningEffort::XHigh => "XHigh",
+        }
+    }
+
+    pub fn claude_arg_value(self) -> Option<&'static str> {
+        match self {
+            ReasoningEffort::Low => Some("low"),
+            ReasoningEffort::Medium => Some("medium"),
+            ReasoningEffort::High => Some("high"),
+            ReasoningEffort::Minimal | ReasoningEffort::XHigh => None,
+        }
+    }
+
+    pub fn codex_config_value(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 impl AgentMode {
     /// Convert to Claude's --permission-mode argument value
     pub fn as_permission_mode(&self) -> &'static str {
@@ -122,6 +167,8 @@ pub struct AgentStartConfig {
     pub additional_args: Vec<String>,
     /// Model to use (e.g., "sonnet", "opus" for Claude; "o4-mini" for Codex)
     pub model: Option<String>,
+    /// Optional reasoning effort profile.
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Optional image paths to attach to the initial prompt
     pub images: Vec<PathBuf>,
     /// Agent mode (Build vs Plan)
@@ -142,6 +189,7 @@ impl AgentStartConfig {
             timeout_ms: None,
             additional_args: vec![],
             model: None,
+            reasoning_effort: None,
             images: Vec::new(),
             agent_mode: AgentMode::default(),
             input_format: None,
@@ -166,6 +214,11 @@ impl AgentStartConfig {
 
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
         self
     }
 

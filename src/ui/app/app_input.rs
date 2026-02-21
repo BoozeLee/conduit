@@ -542,6 +542,9 @@ impl App {
             InputMode::SelectingModel => {
                 self.state.model_selector_state.insert_char(c);
             }
+            InputMode::SelectingReasoning => {
+                self.state.reasoning_selector_state.insert_char(c);
+            }
             _ => {}
         }
     }
@@ -629,6 +632,10 @@ impl App {
                 let sanitized = pasted.replace('\n', " ");
                 self.state.model_selector_state.insert_str(&sanitized);
             }
+            InputMode::SelectingReasoning => {
+                let sanitized = pasted.replace('\n', " ");
+                self.state.reasoning_selector_state.insert_str(&sanitized);
+            }
             _ => {}
         }
     }
@@ -659,6 +666,10 @@ impl App {
                     && self.state.theme_picker_state.is_visible()
                 {
                     self.state.theme_picker_state.select_prev();
+                } else if self.state.input_mode == InputMode::SelectingReasoning
+                    && self.state.reasoning_selector_state.is_visible()
+                {
+                    self.state.reasoning_selector_state.select_previous();
                 } else if self.handle_tab_bar_wheel(x, y, true) {
                     return Ok(Vec::new());
                 } else if self.state.view_mode == ViewMode::RawEvents {
@@ -692,6 +703,10 @@ impl App {
                     && self.state.theme_picker_state.is_visible()
                 {
                     self.state.theme_picker_state.select_next();
+                } else if self.state.input_mode == InputMode::SelectingReasoning
+                    && self.state.reasoning_selector_state.is_visible()
+                {
+                    self.state.reasoning_selector_state.select_next();
                 } else if self.handle_tab_bar_wheel(x, y, false) {
                     return Ok(Vec::new());
                 } else if self.state.view_mode == ViewMode::RawEvents {

@@ -18,6 +18,7 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommand {
     Model,
+    Reasoning,
     NewSession,
 }
 
@@ -25,6 +26,7 @@ impl SlashCommand {
     pub fn label(&self) -> &'static str {
         match self {
             SlashCommand::Model => "/model",
+            SlashCommand::Reasoning => "/reasoning",
             SlashCommand::NewSession => "/new",
         }
     }
@@ -32,6 +34,7 @@ impl SlashCommand {
     pub fn description(&self) -> &'static str {
         match self {
             SlashCommand::Model => "Select model",
+            SlashCommand::Reasoning => "Set reasoning effort",
             SlashCommand::NewSession => "Start a new session",
         }
     }
@@ -137,6 +140,7 @@ impl SlashMenuState {
     fn build_commands() -> Vec<SlashCommandEntry> {
         vec![
             SlashCommandEntry::new(SlashCommand::Model),
+            SlashCommandEntry::new(SlashCommand::Reasoning),
             SlashCommandEntry::new(SlashCommand::NewSession),
         ]
     }

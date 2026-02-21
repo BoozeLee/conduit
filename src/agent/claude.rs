@@ -76,6 +76,10 @@ impl ClaudeCodeRunner {
             cmd.arg("--model").arg(model);
         }
 
+        if let Some(effort) = config.reasoning_effort.and_then(|v| v.claude_arg_value()) {
+            cmd.arg("--effort").arg(effort);
+        }
+
         // Working directory
         cmd.current_dir(&config.working_dir);
 
@@ -1005,5 +1009,23 @@ mod tests {
             "Command should NOT contain '--' separator when prompt is empty. Args: {:?}",
             args
         );
+    }
+
+    #[test]
+    fn test_reasoning_effort_adds_effort_flag() {
+        let runner = ClaudeCodeRunner {
+            binary_path: PathBuf::from("/usr/bin/claude"),
+        };
+        let config = AgentStartConfig::new("hello", PathBuf::from("/tmp"))
+            .with_reasoning_effort(crate::agent::ReasoningEffort::High);
+
+        let cmd = runner.build_command(&config);
+        let args = get_command_args(&cmd);
+
+        let effort_pos = args
+            .iter()
+            .position(|arg| arg == "--effort")
+            .expect("expected --effort");
+        assert_eq!(args.get(effort_pos + 1).map(String::as_str), Some("high"));
     }
 }

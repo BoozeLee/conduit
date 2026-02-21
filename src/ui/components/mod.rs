@@ -23,6 +23,7 @@ mod path_input;
 mod project_picker;
 mod raw_events_types;
 mod raw_events_view;
+mod reasoning_selector;
 mod scrollbar;
 mod searchable_list;
 mod session_header;
@@ -76,6 +77,7 @@ pub use raw_events_types::{
     EventDetailState, EventDirection, RawEventEntry, DETAIL_PANEL_BREAKPOINT,
 };
 pub use raw_events_view::{RawEventsClick, RawEventsScrollbarMetrics, RawEventsView};
+pub use reasoning_selector::{ReasoningOption, ReasoningSelector, ReasoningSelectorState};
 pub use scrollbar::{render_minimal_scrollbar, scrollbar_offset_from_point, ScrollbarMetrics};
 pub use searchable_list::SearchableListState;
 pub use session_header::SessionHeader;

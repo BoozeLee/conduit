@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::agent::{
     events::{ContextCompactionEvent, ContextWarningLevel, ContextWindowState, TokenUsageEvent},
     models::ModelRegistry,
-    AgentHandle, AgentInput, AgentMode, AgentType, SessionId, TokenUsage,
+    AgentHandle, AgentInput, AgentMode, AgentType, ReasoningEffort, SessionId, TokenUsage,
 };
 use crate::data::{QueuedMessage, QueuedMessageMode};
 use crate::git::PrManager;
@@ -32,6 +32,8 @@ pub struct AgentSession {
     pub model: Option<String>,
     /// Whether the selected model is invalid and needs re-selection
     pub model_invalid: bool,
+    /// Optional reasoning effort override for this session
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Associated workspace ID (for project context)
     pub workspace_id: Option<Uuid>,
     /// Working directory for the agent (workspace path)
@@ -127,6 +129,7 @@ impl AgentSession {
             last_mode_prompt: None,
             model: None,
             model_invalid: false,
+            reasoning_effort: None,
             workspace_id: None,
             working_dir: None,
             project_name: None,
@@ -250,6 +253,9 @@ impl AgentSession {
         self.model = model;
         if self.model.is_some() {
             self.model_invalid = false;
+        }
+        if agent_changed {
+            self.reasoning_effort = None;
         }
         self.last_mode_prompt = None;
 
@@ -494,6 +500,10 @@ impl AgentSession {
     pub fn set_capabilities(&mut self, capabilities: AgentCapabilities) {
         self.capabilities = capabilities;
         self.update_status();
+    }
+
+    pub fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffort>) {
+        self.reasoning_effort = effort;
     }
 }
 

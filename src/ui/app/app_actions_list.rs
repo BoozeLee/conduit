@@ -16,6 +16,9 @@ impl App {
                 InputMode::SelectingModel => {
                     self.state.model_selector_state.select_next();
                 }
+                InputMode::SelectingReasoning => {
+                    self.state.reasoning_selector_state.select_next();
+                }
                 InputMode::SelectingTheme => {
                     self.state.theme_picker_state.select_next();
                 }
@@ -51,6 +54,9 @@ impl App {
                 }
                 InputMode::SelectingModel => {
                     self.state.model_selector_state.select_previous();
+                }
+                InputMode::SelectingReasoning => {
+                    self.state.reasoning_selector_state.select_previous();
                 }
                 InputMode::SelectingTheme => {
                     self.state.theme_picker_state.select_prev();

@@ -55,6 +55,9 @@ impl App {
                 InputMode::SelectingModel => {
                     self.state.model_selector_state.delete_char();
                 }
+                InputMode::SelectingReasoning => {
+                    self.state.reasoning_selector_state.delete_char();
+                }
                 _ => {
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
                         session.input_box.backspace();
@@ -68,6 +71,8 @@ impl App {
                     self.state.theme_picker_state.delete();
                 } else if self.state.input_mode == InputMode::SelectingModel {
                     self.state.model_selector_state.delete_forward();
+                } else if self.state.input_mode == InputMode::SelectingReasoning {
+                    self.state.reasoning_selector_state.delete_forward();
                 } else if self.state.input_mode == InputMode::SlashMenu {
                     self.state.slash_menu_state.delete_forward();
                 } else if self.state.input_mode == InputMode::SettingBaseDir {
@@ -101,6 +106,8 @@ impl App {
                     self.state.theme_picker_state.move_left();
                 } else if self.state.input_mode == InputMode::SelectingModel {
                     self.state.model_selector_state.move_cursor_left();
+                } else if self.state.input_mode == InputMode::SelectingReasoning {
+                    self.state.reasoning_selector_state.move_cursor_left();
                 } else if self.state.input_mode == InputMode::AddingRepository {
                     self.state.add_repo_dialog_state.move_left();
                 } else if self.state.input_mode == InputMode::SettingBaseDir {
@@ -114,6 +121,8 @@ impl App {
                     self.state.theme_picker_state.move_right();
                 } else if self.state.input_mode == InputMode::SelectingModel {
                     self.state.model_selector_state.move_cursor_right();
+                } else if self.state.input_mode == InputMode::SelectingReasoning {
+                    self.state.reasoning_selector_state.move_cursor_right();
                 } else if self.state.input_mode == InputMode::AddingRepository {
                     self.state.add_repo_dialog_state.move_right();
                 } else if self.state.input_mode == InputMode::SettingBaseDir {
@@ -127,6 +136,8 @@ impl App {
                     self.state.theme_picker_state.move_to_start();
                 } else if self.state.input_mode == InputMode::SelectingModel {
                     self.state.model_selector_state.move_cursor_start();
+                } else if self.state.input_mode == InputMode::SelectingReasoning {
+                    self.state.reasoning_selector_state.move_cursor_start();
                 } else if self.state.input_mode == InputMode::AddingRepository {
                     self.state.add_repo_dialog_state.move_start();
                 } else if self.state.input_mode == InputMode::SettingBaseDir {
@@ -140,6 +151,8 @@ impl App {
                     self.state.theme_picker_state.move_to_end();
                 } else if self.state.input_mode == InputMode::SelectingModel {
                     self.state.model_selector_state.move_cursor_end();
+                } else if self.state.input_mode == InputMode::SelectingReasoning {
+                    self.state.reasoning_selector_state.move_cursor_end();
                 } else if self.state.input_mode == InputMode::AddingRepository {
                     self.state.add_repo_dialog_state.move_end();
                 } else if self.state.input_mode == InputMode::SettingBaseDir {

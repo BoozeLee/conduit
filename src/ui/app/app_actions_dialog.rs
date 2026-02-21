@@ -14,6 +14,10 @@ impl App {
                     self.state.model_selector_state.hide();
                     self.state.input_mode = InputMode::Normal;
                 }
+                InputMode::SelectingReasoning => {
+                    self.state.reasoning_selector_state.hide();
+                    self.state.input_mode = InputMode::Normal;
+                }
                 InputMode::SelectingTheme => {
                     self.state.theme_picker_state.hide(true); // Cancelled - restore original
                     self.state.input_mode = InputMode::Normal;

@@ -162,6 +162,7 @@ impl KeyContext {
             InputMode::SelectingAgent => return KeyContext::Dialog,
             InputMode::AddingRepository => return KeyContext::AddRepository,
             InputMode::SelectingModel => return KeyContext::ModelSelector,
+            InputMode::SelectingReasoning => return KeyContext::ModelSelector,
             InputMode::SettingBaseDir => return KeyContext::BaseDir,
             InputMode::PickingProject => return KeyContext::ProjectPicker,
             InputMode::Confirming => return KeyContext::Dialog,

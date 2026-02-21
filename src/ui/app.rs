@@ -53,8 +53,8 @@ use crate::ui::components::{
     ConfirmationContext, ConfirmationDialog, ConfirmationType, DefaultModelSelection, ErrorDialog,
     EventDirection, GlobalFooter, HelpDialog, InlinePromptState, InlinePromptType, MessageRole,
     MissingToolDialog, ModelSelector, ProcessingState, ProjectPicker, PromptAnswer, RawEventsClick,
-    SessionHeader, SessionImportPicker, Sidebar, SidebarData, SlashCommand, SlashMenu, TabBar,
-    TabBarHitTarget, ThemePicker, SIDEBAR_HEADER_ROWS,
+    ReasoningSelector, SessionHeader, SessionImportPicker, Sidebar, SidebarData, SlashCommand,
+    SlashMenu, TabBar, TabBarHitTarget, ThemePicker, SIDEBAR_HEADER_ROWS,
 };
 use crate::ui::effect::Effect;
 use crate::ui::events::{
@@ -1729,6 +1729,7 @@ impl App {
             | Action::InterruptAgent
             | Action::ToggleViewMode
             | Action::ShowModelSelector
+            | Action::ShowReasoningSelector
             | Action::ShowThemePicker
             | Action::OpenSessionImport
             | Action::ImportSession
@@ -1836,6 +1837,16 @@ impl App {
                                 effects.extend(
                                     Box::pin(self.execute_action(
                                         Action::ShowModelSelector,
+                                        terminal,
+                                        guard,
+                                    ))
+                                    .await?,
+                                );
+                            }
+                            SlashCommand::Reasoning => {
+                                effects.extend(
+                                    Box::pin(self.execute_action(
+                                        Action::ShowReasoningSelector,
                                         terminal,
                                         guard,
                                     ))
@@ -2942,6 +2953,7 @@ impl App {
                     | InputMode::SlashMenu
                     | InputMode::SelectingTheme
                     | InputMode::SelectingModel
+                    | InputMode::SelectingReasoning
             )
     }
 
@@ -3528,6 +3540,10 @@ impl App {
             AgentType::Gemini => crate::util::Tool::Gemini,
             AgentType::Opencode => crate::util::Tool::Opencode,
         }
+    }
+
+    fn reasoning_supported(agent_type: AgentType) -> bool {
+        matches!(agent_type, AgentType::Claude | AgentType::Codex)
     }
 
     fn session_started(session: &AgentSession) -> bool {
@@ -4435,6 +4451,13 @@ impl App {
             return Ok(effects);
         }
 
+        if self.state.input_mode == InputMode::SelectingReasoning
+            && self.state.reasoning_selector_state.is_visible()
+        {
+            self.handle_reasoning_selector_click(x, y);
+            return Ok(effects);
+        }
+
         // Handle project picker clicks first (it's a modal dialog)
         if self.state.input_mode == InputMode::PickingProject
             && self.state.project_picker_state.is_visible()
@@ -5032,6 +5055,76 @@ impl App {
         }
 
         None
+    }
+
+    fn handle_reasoning_selector_click(&mut self, x: u16, y: u16) {
+        const DIALOG_WIDTH: u16 = 58;
+        const DIALOG_HEIGHT: u16 = 14;
+
+        let terminal_size = crossterm::terminal::size().unwrap_or((80, 24));
+        let screen = Rect::new(0, 0, terminal_size.0, terminal_size.1);
+
+        let dialog_width = DIALOG_WIDTH.min(screen.width.saturating_sub(4));
+        let dialog_height = DIALOG_HEIGHT.min(screen.height.saturating_sub(2));
+        let dialog_x = (screen.width.saturating_sub(dialog_width)) / 2;
+        let dialog_y = (screen.height.saturating_sub(dialog_height)) / 2;
+        let dialog_area = Rect {
+            x: dialog_x,
+            y: dialog_y,
+            width: dialog_width,
+            height: dialog_height,
+        };
+
+        if !Self::point_in_rect(x, y, dialog_area) {
+            self.state.reasoning_selector_state.hide();
+            self.state.input_mode = InputMode::Normal;
+            return;
+        }
+
+        let inner = dialog_content_area(dialog_area);
+        if inner.height < 4 {
+            return;
+        }
+
+        // Layout: search, separator, list, hint
+        let list_y = inner.y + 2;
+        let list_height = inner.height.saturating_sub(3);
+        self.state
+            .reasoning_selector_state
+            .set_max_visible(list_height.saturating_sub(1) as usize);
+
+        if y >= list_y && y < list_y + list_height {
+            let clicked_row = (y - list_y) as usize;
+            if self
+                .state
+                .reasoning_selector_state
+                .select_at_row(clicked_row)
+            {
+                if let Some(option) = self.state.reasoning_selector_state.selected_option() {
+                    if let Some(session) = self.state.tab_manager.active_session_mut() {
+                        if Self::session_started(session) {
+                            let display = MessageDisplay::Error {
+                                content: "Changing reasoning effort after a session has started is not supported. Start a new session/tab."
+                                    .to_string(),
+                            };
+                            session.chat_view.push(display.to_chat_message());
+                            return;
+                        }
+                        session.set_reasoning_effort(option.effort);
+                        let msg = match option.effort {
+                            Some(effort) => {
+                                format!("Reasoning effort set to: {}", effort.display_name())
+                            }
+                            None => "Reasoning effort set to: Auto".to_string(),
+                        };
+                        let display = MessageDisplay::System { content: msg };
+                        session.chat_view.push(display.to_chat_message());
+                    }
+                }
+                self.state.reasoning_selector_state.hide();
+                self.state.input_mode = InputMode::Normal;
+            }
+        }
     }
 
     /// Handle click in project picker dialog
@@ -6817,6 +6910,7 @@ impl App {
             agent_type,
             agent_mode,
             model,
+            reasoning_effort,
             model_invalid,
             session_id_to_use,
             working_dir,
@@ -6839,6 +6933,7 @@ impl App {
             let agent_type = session.agent_type;
             let agent_mode = session.agent_mode;
             let model = session.model.clone();
+            let reasoning_effort = session.reasoning_effort;
             let model_invalid = session.model_invalid;
             // Use agent_session_id if available (set by agent after first prompt)
             // Fall back to resume_session_id (clone, don't take - we consume it later)
@@ -6854,6 +6949,7 @@ impl App {
                 agent_type,
                 agent_mode,
                 model,
+                reasoning_effort,
                 model_invalid,
                 session_id_to_use,
                 working_dir,
@@ -7080,6 +7176,9 @@ impl App {
         // Add model if specified
         if let Some(model_id) = model {
             config = config.with_model(model_id);
+        }
+        if let Some(effort) = reasoning_effort {
+            config = config.with_reasoning_effort(effort);
         }
 
         // Structured stdin payload (used for tool results / stream-json input)
@@ -7648,6 +7747,7 @@ impl App {
             agent_type: session.agent_type,
             agent_mode: session.agent_mode,
             model: session.model.clone(),
+            reasoning_effort: session.reasoning_effort,
             parent_session_id: session
                 .agent_session_id
                 .as_ref()
@@ -7771,6 +7871,7 @@ impl App {
         session.project_name = project_name;
         session.workspace_name = Some(workspace.name.clone());
         session.model = pending.model.clone();
+        session.reasoning_effort = pending.reasoning_effort;
         session.model_invalid = false;
         session.agent_mode = pending.agent_mode;
         session.fork_seed_id = Some(fork_seed_id);
@@ -8635,6 +8736,13 @@ impl App {
                             self.state.model_selector_state.update_viewport(size);
                             let selector = ModelSelector::new();
                             selector.render(size, f.buffer_mut(), &self.state.model_selector_state);
+                        } else if self.state.reasoning_selector_state.is_visible() {
+                            let selector = ReasoningSelector::new();
+                            selector.render(
+                                size,
+                                f.buffer_mut(),
+                                &self.state.reasoning_selector_state,
+                            );
                         } else if self.state.theme_picker_state.is_visible() {
                             self.render_theme_picker(size, f.buffer_mut());
                         }
@@ -9036,6 +9144,11 @@ impl App {
             self.state.model_selector_state.update_viewport(size);
             let model_selector = ModelSelector::new();
             model_selector.render(size, f.buffer_mut(), &self.state.model_selector_state);
+        }
+
+        if self.state.reasoning_selector_state.is_visible() {
+            let selector = ReasoningSelector::new();
+            selector.render(size, f.buffer_mut(), &self.state.reasoning_selector_state);
         }
 
         // Draw theme picker dialog if open
@@ -9782,7 +9895,7 @@ async fn generate_title_and_branch_impl(
 mod tests {
     use super::*;
     use crate::agent::events::{AssistantMessageEvent, ReasoningEvent};
-    use crate::agent::AgentType;
+    use crate::agent::{AgentType, ReasoningEffort};
     use crate::config::Config;
     use crate::data::{QueuedMessage, QueuedMessageMode};
     use crate::ui::components::MessageRole;
@@ -10662,6 +10775,81 @@ mod tests {
         assert!(!app.state.agent_selector_state.is_visible());
         assert!(app.state.tab_manager.active_session().is_some());
         assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn test_handle_confirm_action_selecting_reasoning_sets_effort() {
+        let session_id = Uuid::new_v4();
+        let mut app = build_test_app_with_sessions(&[session_id]);
+        {
+            let session = app
+                .state
+                .tab_manager
+                .active_session_mut()
+                .expect("session missing");
+            session.agent_type = AgentType::Codex;
+        }
+        app.state
+            .reasoning_selector_state
+            .show(AgentType::Codex, None);
+        app.state.reasoning_selector_state.insert_str("xhigh");
+        app.state.input_mode = InputMode::SelectingReasoning;
+
+        let mut effects = Vec::new();
+        app.handle_confirm_action(&mut effects).unwrap();
+
+        assert_eq!(app.state.input_mode, InputMode::Normal);
+        assert!(!app.state.reasoning_selector_state.is_visible());
+        assert!(effects.is_empty());
+
+        let session = app
+            .state
+            .tab_manager
+            .active_session()
+            .expect("session missing");
+        assert_eq!(session.reasoning_effort, Some(ReasoningEffort::XHigh));
+    }
+
+    #[test]
+    fn test_handle_confirm_action_selecting_reasoning_blocked_after_session_started() {
+        let session_id = Uuid::new_v4();
+        let mut app = build_test_app_with_sessions(&[session_id]);
+        {
+            let session = app
+                .state
+                .tab_manager
+                .active_session_mut()
+                .expect("session missing");
+            session.turn_count = 1;
+        }
+        app.state
+            .reasoning_selector_state
+            .show(AgentType::Codex, None);
+        app.state.reasoning_selector_state.insert_str("low");
+        app.state.input_mode = InputMode::SelectingReasoning;
+
+        let mut effects = Vec::new();
+        app.handle_confirm_action(&mut effects).unwrap();
+
+        assert_eq!(app.state.input_mode, InputMode::SelectingReasoning);
+        assert!(app.state.reasoning_selector_state.is_visible());
+        assert!(effects.is_empty());
+
+        let session = app
+            .state
+            .tab_manager
+            .active_session()
+            .expect("session missing");
+        assert_eq!(session.reasoning_effort, None);
+        let last = session
+            .chat_view
+            .messages()
+            .last()
+            .expect("expected error message");
+        assert_eq!(last.role, MessageRole::Error);
+        assert!(last
+            .content
+            .contains("Changing reasoning effort after a session has started"));
     }
 
     #[test]

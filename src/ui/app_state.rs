@@ -4,12 +4,13 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
-use crate::agent::{AgentMode, AgentType};
+use crate::agent::{AgentMode, AgentType, ReasoningEffort};
 use crate::ui::components::{
     AddRepoDialogState, AgentSelectorState, BaseDirDialogState, CommandPaletteState,
     ConfirmationDialogState, ErrorDialogState, HelpDialogState, KnightRiderSpinner,
     LogoShineAnimation, MissingToolDialogState, ModelSelectorState, ProjectPickerState,
-    SessionImportPickerState, SidebarData, SidebarState, SlashMenuState, ThemePickerState,
+    ReasoningSelectorState, SessionImportPickerState, SidebarData, SidebarState, SlashMenuState,
+    ThemePickerState,
 };
 use crate::ui::events::{InputMode, ViewMode};
 use crate::ui::tab_manager::TabManager;
@@ -164,6 +165,7 @@ pub struct AppState {
     pub sidebar_data: SidebarData,
     pub add_repo_dialog_state: AddRepoDialogState,
     pub model_selector_state: ModelSelectorState,
+    pub reasoning_selector_state: ReasoningSelectorState,
     pub theme_picker_state: ThemePickerState,
     pub agent_selector_state: AgentSelectorState,
     pub base_dir_dialog_state: BaseDirDialogState,
@@ -228,6 +230,7 @@ pub struct PendingForkRequest {
     pub agent_type: AgentType,
     pub agent_mode: AgentMode,
     pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub parent_session_id: Option<String>,
     pub parent_workspace_id: Uuid,
     /// Uses Arc to avoid cloning large seed prompts during struct clones
@@ -244,6 +247,7 @@ impl std::fmt::Debug for PendingForkRequest {
             .field("agent_type", &self.agent_type)
             .field("agent_mode", &self.agent_mode)
             .field("model", &self.model)
+            .field("reasoning_effort", &self.reasoning_effort)
             .field("parent_session_id", &self.parent_session_id)
             .field("parent_workspace_id", &self.parent_workspace_id)
             .field("seed_prompt_len", &self.seed_prompt.len())
@@ -285,6 +289,7 @@ impl AppState {
             sidebar_data: SidebarData::new(),
             add_repo_dialog_state: AddRepoDialogState::new(),
             model_selector_state: ModelSelectorState::default(),
+            reasoning_selector_state: ReasoningSelectorState::default(),
             theme_picker_state: ThemePickerState::default(),
             agent_selector_state: AgentSelectorState::new(),
             base_dir_dialog_state: BaseDirDialogState::new(),
@@ -336,6 +341,7 @@ impl AppState {
         self.project_picker_state.hide();
         self.session_import_state.hide();
         self.model_selector_state.hide();
+        self.reasoning_selector_state.hide();
         self.theme_picker_state.hide(true); // cancelled=true since we're closing all overlays
         self.agent_selector_state.hide();
         self.confirmation_dialog_state.hide();
@@ -351,6 +357,7 @@ impl AppState {
             || self.project_picker_state.is_visible()
             || self.add_repo_dialog_state.is_visible()
             || self.model_selector_state.is_visible()
+            || self.reasoning_selector_state.is_visible()
             || self.theme_picker_state.is_visible()
             || self.agent_selector_state.is_visible()
             || self.confirmation_dialog_state.visible
