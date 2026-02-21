@@ -34,6 +34,12 @@ pub struct ProjectPickerState {
     pub base_dir: PathBuf,
     /// Searchable list state
     pub list: SearchableListState,
+    /// Whether directory scanning is in progress
+    pub loading: bool,
+    /// Optional error from scanning
+    pub error: Option<String>,
+    /// Spinner frame for loading animation
+    pub spinner_frame: usize,
 }
 
 impl Default for ProjectPickerState {
@@ -49,21 +55,59 @@ impl ProjectPickerState {
             projects: Vec::new(),
             base_dir: PathBuf::new(),
             list: SearchableListState::new(10),
+            loading: false,
+            error: None,
+            spinner_frame: 0,
         }
     }
 
     /// Show the picker with projects from the given base directory
     pub fn show(&mut self, base_dir: PathBuf) {
+        self.show_loading(base_dir.clone());
+        match Self::scan_projects(base_dir) {
+            Ok(projects) => self.load_projects(projects),
+            Err(err) => self.set_error(err),
+        }
+    }
+
+    /// Show the picker and enter loading state.
+    pub fn show_loading(&mut self, base_dir: PathBuf) {
         self.visible = true;
         self.base_dir = base_dir;
         self.list.reset();
-        self.scan_directory();
+        self.projects.clear();
+        self.loading = true;
+        self.error = None;
+        self.spinner_frame = 0;
+    }
+
+    /// Load discovered projects and leave loading state.
+    pub fn load_projects(&mut self, projects: Vec<ProjectEntry>) {
+        self.projects = projects;
+        self.loading = false;
+        self.error = None;
         self.filter();
     }
 
     /// Hide the dialog
     pub fn hide(&mut self) {
         self.visible = false;
+        self.loading = false;
+    }
+
+    /// Set error state for picker discovery.
+    pub fn set_error(&mut self, error: String) {
+        self.error = Some(error);
+        self.loading = false;
+        self.projects.clear();
+        self.filter();
+    }
+
+    /// Advance loading spinner.
+    pub fn tick(&mut self) {
+        if self.loading {
+            self.spinner_frame = self.spinner_frame.wrapping_add(1);
+        }
     }
 
     pub fn scrollbar_metrics(&self, area: Rect) -> Option<ScrollbarMetrics> {
@@ -123,13 +167,10 @@ impl ProjectPickerState {
         })
     }
 
-    /// Scan the base directory for git projects
-    pub fn scan_directory(&mut self) {
-        self.projects.clear();
-
-        let Ok(entries) = std::fs::read_dir(&self.base_dir) else {
-            return;
-        };
+    /// Scan a base directory for git projects.
+    pub fn scan_projects(base_dir: PathBuf) -> Result<Vec<ProjectEntry>, String> {
+        let entries = std::fs::read_dir(&base_dir)
+            .map_err(|e| format!("Failed to read {}: {}", base_dir.display(), e))?;
 
         let mut projects: Vec<ProjectEntry> = entries
             .filter_map(|e| e.ok())
@@ -152,7 +193,7 @@ impl ProjectPickerState {
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
             time_b.cmp(&time_a) // Descending order (most recent first)
         });
-        self.projects = projects;
+        Ok(projects)
     }
 
     /// Filter projects based on search string
@@ -259,6 +300,8 @@ impl ProjectPickerState {
 /// Project picker dialog widget
 pub struct ProjectPicker;
 
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 impl ProjectPicker {
     pub fn new() -> Self {
         Self
@@ -323,7 +366,19 @@ impl ProjectPicker {
 
         // Render project list
         let list_area = chunks[2];
-        if state.list.filtered.is_empty() {
+        if state.loading {
+            let spinner = SPINNER_FRAMES[state.spinner_frame % SPINNER_FRAMES.len()];
+            let loading = Paragraph::new(format!("{} Scanning projects...", spinner))
+                .style(Style::default().fg(Color::Cyan))
+                .alignment(Alignment::Center);
+            loading.render(list_area, buf);
+        } else if let Some(error) = &state.error {
+            let msg = format!("Failed to scan projects: {}", error);
+            let error = Paragraph::new(msg)
+                .style(Style::default().fg(Color::Red))
+                .alignment(Alignment::Center);
+            error.render(list_area, buf);
+        } else if state.list.filtered.is_empty() {
             let empty_msg = if state.projects.is_empty() {
                 "No git projects found in this directory"
             } else {

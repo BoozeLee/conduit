@@ -13,7 +13,7 @@ impl App {
         match action {
             Action::ConfirmYes => {
                 if self.state.input_mode == InputMode::Confirming {
-                    if self.is_archive_progress_dialog() {
+                    if self.is_blocking_confirmation_loading_dialog() {
                         return Ok(());
                     }
                     if let Some(context) = self.state.confirmation_dialog_state.context.clone() {
@@ -46,10 +46,16 @@ impl App {
                             ConfirmationContext::ArchiveWorkspaceInProgress { .. } => {
                                 return Ok(());
                             }
+                            ConfirmationContext::ArchiveWorkspacePreflightInProgress { .. } => {
+                                return Ok(());
+                            }
                             ConfirmationContext::RemoveProject(id) => {
                                 effects.push(self.execute_remove_project(id));
                                 self.state.confirmation_dialog_state.hide();
                                 self.state.input_mode = InputMode::SidebarNavigation;
+                            }
+                            ConfirmationContext::RemoveProjectPreflightInProgress { .. } => {
+                                return Ok(());
                             }
                             ConfirmationContext::CreatePullRequest {
                                 tab_index,
@@ -86,13 +92,16 @@ impl App {
                                     effects.push(effect);
                                 }
                             }
+                            ConfirmationContext::ForkSessionPreflightInProgress { .. } => {
+                                return Ok(());
+                            }
                         }
                     }
                 }
             }
             Action::ConfirmNo => {
                 if self.state.input_mode == InputMode::Confirming {
-                    if self.is_archive_progress_dialog() {
+                    if self.is_blocking_confirmation_loading_dialog() {
                         return Ok(());
                     }
                     if let Some(context) = self.state.confirmation_dialog_state.context.clone() {
@@ -122,6 +131,15 @@ impl App {
                             ConfirmationContext::ArchiveWorkspaceInProgress { .. } => {
                                 return Ok(());
                             }
+                            ConfirmationContext::ArchiveWorkspacePreflightInProgress { .. } => {
+                                return Ok(());
+                            }
+                            ConfirmationContext::RemoveProjectPreflightInProgress { .. } => {
+                                return Ok(());
+                            }
+                            ConfirmationContext::ForkSessionPreflightInProgress { .. } => {
+                                return Ok(());
+                            }
                             _ => {
                                 self.state.input_mode = self.dismiss_confirmation_dialog();
                             }
@@ -133,7 +151,7 @@ impl App {
             }
             Action::ConfirmToggle => {
                 if self.state.input_mode == InputMode::Confirming {
-                    if self.is_archive_progress_dialog() {
+                    if self.is_blocking_confirmation_loading_dialog() {
                         return Ok(());
                     }
                     self.state.confirmation_dialog_state.toggle_selection();

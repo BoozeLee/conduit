@@ -52,15 +52,17 @@ use crate::ui::components::{
     dialog_content_area, AddRepoDialog, AgentSelector, BaseDirDialog, ChatMessage, CommandPalette,
     ConfirmationContext, ConfirmationDialog, ConfirmationType, DefaultModelSelection, ErrorDialog,
     EventDirection, GlobalFooter, HelpDialog, InlinePromptState, InlinePromptType, MessageRole,
-    MissingToolDialog, ModelSelector, ProcessingState, ProjectPicker, PromptAnswer,
+    MissingToolDialog, ModelSelector, ProcessingState, ProjectEntry, ProjectPicker, PromptAnswer,
     ProviderSelector, RawEventsClick, ReasoningSelector, SessionHeader, SessionImportPicker,
     Sidebar, SidebarData, SlashCommand, SlashMenu, TabBar, TabBarHitTarget, ThemePicker,
     SIDEBAR_HEADER_ROWS,
 };
 use crate::ui::effect::Effect;
 use crate::ui::events::{
-    AppEvent, ArchiveWorkspacePreflightResult, ForkWorkspaceCreated, InputMode,
-    RemoveProjectResult, TitleGeneratedResult, ViewMode, WorkspaceArchived, WorkspaceCreated,
+    AppEvent, ArchiveWorkspaceDialogPreflightResult, ArchiveWorkspacePreflightResult,
+    ForkSessionDialogPreflightResult, ForkWorkspaceCreated, InputMode, ProjectDiscoveryEntry,
+    RemoveProjectDialogPreflightResult, RemoveProjectResult, TitleGeneratedResult, ViewMode,
+    WorkspaceArchived, WorkspaceCreated,
 };
 use crate::ui::session::AgentSession;
 use crate::ui::terminal_guard::TerminalGuard;
@@ -1283,6 +1285,9 @@ impl App {
 
         // Tick session import spinner (for loading state)
         self.state.session_import_state.tick();
+
+        // Tick project picker spinner (for loading state)
+        self.state.project_picker_state.tick();
 
         if let Some(session) = self.state.tab_manager.active_session_mut() {
             session.tick();
@@ -3661,14 +3666,40 @@ impl App {
     fn open_new_project_target(&mut self, target: NewProjectTarget) {
         match target {
             NewProjectTarget::ProjectPicker(base_path) => {
-                self.state.project_picker_state.show(base_path);
-                self.state.input_mode = InputMode::PickingProject;
+                self.start_project_discovery(base_path);
             }
             NewProjectTarget::BaseDirDialog => {
                 self.state.base_dir_dialog_state.show();
                 self.state.input_mode = InputMode::SettingBaseDir;
             }
         }
+    }
+
+    fn start_project_discovery(&mut self, base_dir: PathBuf) {
+        self.state.close_overlays();
+        self.state
+            .project_picker_state
+            .show_loading(base_dir.clone());
+        self.state.input_mode = InputMode::PickingProject;
+
+        let event_base_dir = base_dir.clone();
+        self.spawn_blocking_preflight(
+            move || {
+                let projects = crate::ui::components::ProjectPickerState::scan_projects(base_dir)?;
+                Ok(projects
+                    .into_iter()
+                    .map(|project| ProjectDiscoveryEntry {
+                        name: project.name,
+                        path: project.path,
+                    })
+                    .collect())
+            },
+            move |result| AppEvent::ProjectsDiscovered {
+                base_dir: event_base_dir,
+                result,
+            },
+            "projects_discovered",
+        );
     }
 
     fn show_onboarding_provider_selector(&mut self) {
@@ -3961,7 +3992,11 @@ impl App {
         let ctx = self.state.confirmation_dialog_state.context.clone();
 
         // Clear pending fork request if dismissing a fork confirmation
-        if matches!(&ctx, Some(ConfirmationContext::ForkSession { .. })) {
+        if matches!(
+            &ctx,
+            Some(ConfirmationContext::ForkSession { .. })
+                | Some(ConfirmationContext::ForkSessionPreflightInProgress { .. })
+        ) {
             self.state.pending_fork_request = None;
         }
 
@@ -3973,12 +4008,15 @@ impl App {
             Some(ConfirmationContext::CreatePullRequest { .. })
             | Some(ConfirmationContext::OpenExistingPr { .. })
             | Some(ConfirmationContext::ForkSession { .. })
+            | Some(ConfirmationContext::ForkSessionPreflightInProgress { .. })
             | Some(ConfirmationContext::SteerFallback { .. }) => InputMode::Normal,
             // Sidebar operations return to sidebar navigation
             Some(ConfirmationContext::ArchiveWorkspace(_))
             | Some(ConfirmationContext::ArchiveWorkspaceRemoteDelete { .. })
+            | Some(ConfirmationContext::ArchiveWorkspacePreflightInProgress { .. })
             | Some(ConfirmationContext::ArchiveWorkspaceInProgress { .. })
             | Some(ConfirmationContext::RemoveProject(_))
+            | Some(ConfirmationContext::RemoveProjectPreflightInProgress { .. })
             | Some(ConfirmationContext::SelectWorkspaceMode { .. }) => InputMode::SidebarNavigation,
             // No context: return to Normal if tabs exist, otherwise SidebarNavigation
             // (avoids unexpectedly flipping to sidebar when user has active tabs)
@@ -3992,12 +4030,41 @@ impl App {
         }
     }
 
-    fn is_archive_progress_dialog(&self) -> bool {
-        self.state.confirmation_dialog_state.loading
-            && matches!(
-                self.state.confirmation_dialog_state.context,
-                Some(ConfirmationContext::ArchiveWorkspaceInProgress { .. })
-            )
+    fn is_blocking_confirmation_loading_dialog(&self) -> bool {
+        self.state.confirmation_dialog_state.visible
+            && self.state.confirmation_dialog_state.loading
+            && self
+                .state
+                .confirmation_dialog_state
+                .context
+                .as_ref()
+                .is_some_and(ConfirmationContext::is_blocking_loading)
+    }
+
+    fn show_blocking_confirmation_loading(
+        &mut self,
+        title: impl Into<String>,
+        loading_message: impl Into<String>,
+        context: ConfirmationContext,
+    ) {
+        self.state.close_overlays();
+        self.state
+            .confirmation_dialog_state
+            .show_loading_with_context(title, loading_message, Some(context));
+        self.state.input_mode = InputMode::Confirming;
+    }
+
+    fn spawn_blocking_preflight<T, W, E>(&self, work: W, event_builder: E, context: &'static str)
+    where
+        T: Send + 'static,
+        W: FnOnce() -> Result<T, String> + Send + 'static,
+        E: FnOnce(Result<T, String>) -> AppEvent + Send + 'static,
+    {
+        let event_tx = self.event_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let result = work();
+            send_app_event(&event_tx, event_builder(result), context);
+        });
     }
 
     fn show_archive_progress_dialog(&mut self, workspace_id: uuid::Uuid) {
@@ -4036,99 +4103,95 @@ impl App {
             return;
         }
 
-        // Get the workspace
-        let Some(workspace_dao) = self.workspace_dao() else {
-            return;
-        };
-        let Some(repo_dao) = self.repo_dao() else {
-            return;
-        };
-
-        let Ok(Some(workspace)) = workspace_dao.get_by_id(workspace_id) else {
-            tracing::error!(workspace_id = %workspace_id, "Workspace not found");
-            return;
-        };
-        let Ok(Some(repo)) = repo_dao.get_by_id(workspace.repository_id) else {
-            tracing::error!(workspace_id = %workspace_id, "Repository not found for workspace");
-            return;
-        };
-        let settings = resolve_repo_workspace_settings(self.config(), &repo);
-
-        // Get git branch status
-        let branch_status = self.worktree_manager().get_branch_status(&workspace.path);
-
-        // Build warnings and determine confirmation type
-        let mut warnings = Vec::new();
-        let mut has_dirty = false;
-        let mut has_unmerged = false;
-
-        if let Ok(status) = branch_status {
-            if status.is_dirty {
-                has_dirty = true;
-                if let Some(desc) = &status.dirty_description {
-                    warnings.push(desc.clone());
-                } else {
-                    warnings.push("Uncommitted changes".to_string());
-                }
-            }
-
-            if !status.is_merged {
-                has_unmerged = true;
-                if status.commits_ahead > 0 {
-                    warnings.push(format!(
-                        "Branch not merged ({} commits ahead)",
-                        status.commits_ahead
-                    ));
-                } else {
-                    warnings.push("Branch not merged into main".to_string());
-                }
-            }
-
-            if status.commits_behind > 0 {
-                warnings.push(format!(
-                    "Branch is {} commits behind main",
-                    status.commits_behind
-                ));
-            }
-        }
-
-        // Determine confirmation type based on warnings
-        let confirmation_type = match (has_dirty, has_unmerged) {
-            (true, true) => ConfirmationType::Danger,
-            (true, false) | (false, true) => ConfirmationType::Warning,
-            (false, false) => {
-                if warnings.is_empty() {
-                    ConfirmationType::Info
-                } else {
-                    ConfirmationType::Warning
-                }
-            }
-        };
-
-        // Build confirmation message
-        let mut message = match settings.mode {
-            WorkspaceMode::Worktree => "This will remove the worktree.".to_string(),
-            WorkspaceMode::Checkout => "This will remove the checkout.".to_string(),
-        };
-
-        if settings.archive_delete_branch {
-            message.push_str(" The local branch will be deleted.");
-        }
-        if settings.archive_delete_branch && settings.archive_remote_prompt {
-            message.push_str(" You'll be asked about deleting the remote branch.");
-        }
-
-        // Show confirmation dialog
-        self.state.close_overlays();
-        self.state.confirmation_dialog_state.show(
-            format!("Archive \"{}\"?", workspace.name),
-            message,
-            warnings,
-            confirmation_type,
-            "Archive",
-            Some(ConfirmationContext::ArchiveWorkspace(workspace_id)),
+        self.show_blocking_confirmation_loading(
+            "Archive Workspace",
+            "Analyzing workspace...",
+            ConfirmationContext::ArchiveWorkspacePreflightInProgress { workspace_id },
         );
-        self.state.input_mode = InputMode::Confirming;
+
+        let workspace_dao = self.workspace_dao_clone();
+        let repo_dao = self.repo_dao_clone();
+        let worktree_manager = self.worktree_manager().clone();
+        let config = self.config().clone();
+
+        self.spawn_blocking_preflight(
+            move || {
+                let workspace_dao =
+                    workspace_dao.ok_or_else(|| "Workspace database unavailable".to_string())?;
+                let repo_dao =
+                    repo_dao.ok_or_else(|| "Repository database unavailable".to_string())?;
+
+                let workspace = workspace_dao
+                    .get_by_id(workspace_id)
+                    .map_err(|e| format!("Failed to load workspace: {}", e))?
+                    .ok_or_else(|| "Workspace not found".to_string())?;
+                let repo = repo_dao
+                    .get_by_id(workspace.repository_id)
+                    .map_err(|e| format!("Failed to load repository: {}", e))?
+                    .ok_or_else(|| "Repository not found for workspace".to_string())?;
+                let settings = resolve_repo_workspace_settings(&config, &repo);
+
+                let branch_status = worktree_manager.get_branch_status(&workspace.path);
+                let mut warnings = Vec::new();
+                let mut has_dirty = false;
+                let mut has_unmerged = false;
+
+                if let Ok(status) = branch_status {
+                    if status.is_dirty {
+                        has_dirty = true;
+                        if let Some(desc) = &status.dirty_description {
+                            warnings.push(desc.clone());
+                        } else {
+                            warnings.push("Uncommitted changes".to_string());
+                        }
+                    }
+
+                    if !status.is_merged {
+                        has_unmerged = true;
+                        if status.commits_ahead > 0 {
+                            warnings.push(format!(
+                                "Branch not merged ({} commits ahead)",
+                                status.commits_ahead
+                            ));
+                        } else {
+                            warnings.push("Branch not merged into main".to_string());
+                        }
+                    }
+
+                    if status.commits_behind > 0 {
+                        warnings.push(format!(
+                            "Branch is {} commits behind main",
+                            status.commits_behind
+                        ));
+                    }
+                }
+
+                let mut message = match settings.mode {
+                    WorkspaceMode::Worktree => "This will remove the worktree.".to_string(),
+                    WorkspaceMode::Checkout => "This will remove the checkout.".to_string(),
+                };
+
+                if settings.archive_delete_branch {
+                    message.push_str(" The local branch will be deleted.");
+                }
+                if settings.archive_delete_branch && settings.archive_remote_prompt {
+                    message.push_str(" You'll be asked about deleting the remote branch.");
+                }
+
+                Ok(ArchiveWorkspaceDialogPreflightResult {
+                    workspace_name: workspace.name,
+                    message,
+                    warnings,
+                    has_dirty,
+                    has_unmerged,
+                })
+            },
+            move |result| AppEvent::ArchiveWorkspaceDialogPreflightCompleted {
+                workspace_id,
+                result,
+            },
+            "archive_workspace_dialog_preflight_completed",
+        );
     }
 
     /// Show an error dialog with a simple message
@@ -4232,79 +4295,73 @@ impl App {
 
     /// Initiate project removal - shows confirmation dialog
     fn initiate_remove_project(&mut self, repo_id: uuid::Uuid) {
-        // Get repository info
-        let Some(repo_dao) = self.repo_dao() else {
-            return;
-        };
-
-        let Ok(Some(repo)) = repo_dao.get_by_id(repo_id) else {
-            tracing::error!(repo_id = %repo_id, "Repository not found");
-            return;
-        };
-
-        // Get all workspaces for this repository
-        let workspaces = if let Some(workspace_dao) = self.workspace_dao() {
-            workspace_dao.get_by_repository(repo_id).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        // Check git status for each workspace
-        let mut warnings = Vec::new();
-        let mut has_dirty = false;
-        let mut has_unmerged = false;
-
-        for ws in &workspaces {
-            if let Ok(status) = self.worktree_manager().get_branch_status(&ws.path) {
-                if status.is_dirty {
-                    has_dirty = true;
-                }
-                if !status.is_merged {
-                    has_unmerged = true;
-                }
-            }
-        }
-
-        // Build warning messages
-        let workspace_count = workspaces.len();
-        if workspace_count > 0 {
-            warnings.push(format!(
-                "{} workspace{} will be archived",
-                workspace_count,
-                if workspace_count == 1 { "" } else { "s" }
-            ));
-        }
-        if has_dirty {
-            warnings.push("Some workspaces have uncommitted changes".to_string());
-        }
-        if has_unmerged {
-            warnings.push("Some branches are not merged to main".to_string());
-        }
-
-        // Determine confirmation type based on risk
-        let confirmation_type = match (has_dirty, has_unmerged) {
-            (true, true) => ConfirmationType::Danger,
-            (true, false) | (false, true) => ConfirmationType::Warning,
-            (false, false) => {
-                if workspace_count > 0 {
-                    ConfirmationType::Warning
-                } else {
-                    ConfirmationType::Info
-                }
-            }
-        };
-
-        // Show confirmation dialog
-        self.state.close_overlays();
-        self.state.confirmation_dialog_state.show(
-            format!("Remove \"{}\"?", repo.name),
-            "This will archive all workspaces and remove the project.",
-            warnings,
-            confirmation_type,
-            "Remove",
-            Some(ConfirmationContext::RemoveProject(repo_id)),
+        self.show_blocking_confirmation_loading(
+            "Remove Project",
+            "Analyzing project workspaces...",
+            ConfirmationContext::RemoveProjectPreflightInProgress { repo_id },
         );
-        self.state.input_mode = InputMode::Confirming;
+
+        let repo_dao = self.repo_dao_clone();
+        let workspace_dao = self.workspace_dao_clone();
+        let worktree_manager = self.worktree_manager().clone();
+
+        self.spawn_blocking_preflight(
+            move || {
+                let repo_dao =
+                    repo_dao.ok_or_else(|| "Repository database unavailable".to_string())?;
+                let workspace_dao =
+                    workspace_dao.ok_or_else(|| "Workspace database unavailable".to_string())?;
+
+                let repo = repo_dao
+                    .get_by_id(repo_id)
+                    .map_err(|e| format!("Failed to load repository: {}", e))?
+                    .ok_or_else(|| "Repository not found".to_string())?;
+
+                let workspaces = workspace_dao
+                    .get_by_repository(repo_id)
+                    .map_err(|e| format!("Failed to load workspaces: {}", e))?;
+
+                let mut warnings = Vec::new();
+                let mut has_dirty = false;
+                let mut has_unmerged = false;
+
+                for workspace in &workspaces {
+                    if let Ok(status) = worktree_manager.get_branch_status(&workspace.path) {
+                        if status.is_dirty {
+                            has_dirty = true;
+                        }
+                        if !status.is_merged {
+                            has_unmerged = true;
+                        }
+                    }
+                }
+
+                let workspace_count = workspaces.len();
+                if workspace_count > 0 {
+                    warnings.push(format!(
+                        "{} workspace{} will be archived",
+                        workspace_count,
+                        if workspace_count == 1 { "" } else { "s" }
+                    ));
+                }
+                if has_dirty {
+                    warnings.push("Some workspaces have uncommitted changes".to_string());
+                }
+                if has_unmerged {
+                    warnings.push("Some branches are not merged to main".to_string());
+                }
+
+                Ok(RemoveProjectDialogPreflightResult {
+                    repo_name: repo.name,
+                    warnings,
+                    has_dirty,
+                    has_unmerged,
+                    workspace_count,
+                })
+            },
+            move |result| AppEvent::RemoveProjectDialogPreflightCompleted { repo_id, result },
+            "remove_project_dialog_preflight_completed",
+        );
     }
 
     /// Execute project removal after confirmation
@@ -4626,7 +4683,7 @@ impl App {
         if self.state.input_mode == InputMode::Confirming
             && self.state.confirmation_dialog_state.visible
         {
-            if self.is_archive_progress_dialog() {
+            if self.is_blocking_confirmation_loading_dialog() {
                 return Ok(effects);
             }
             self.state.input_mode = self.dismiss_confirmation_dialog();
@@ -5615,6 +5672,185 @@ impl App {
                     }
                 }
             }
+            AppEvent::ArchiveWorkspaceDialogPreflightCompleted {
+                workspace_id,
+                result,
+            } => {
+                let is_active_preflight = self.state.confirmation_dialog_state.loading
+                    && matches!(
+                        self.state.confirmation_dialog_state.context,
+                        Some(ConfirmationContext::ArchiveWorkspacePreflightInProgress {
+                            workspace_id: id
+                        }) if id == workspace_id
+                    );
+                if !is_active_preflight {
+                    return Ok(effects);
+                }
+
+                match result {
+                    Ok(preflight) => {
+                        let confirmation_type = match (preflight.has_dirty, preflight.has_unmerged)
+                        {
+                            (true, true) => ConfirmationType::Danger,
+                            (true, false) | (false, true) => ConfirmationType::Warning,
+                            (false, false) => {
+                                if preflight.warnings.is_empty() {
+                                    ConfirmationType::Info
+                                } else {
+                                    ConfirmationType::Warning
+                                }
+                            }
+                        };
+
+                        self.state.confirmation_dialog_state.show(
+                            format!("Archive \"{}\"?", preflight.workspace_name),
+                            preflight.message,
+                            preflight.warnings,
+                            confirmation_type,
+                            "Archive",
+                            Some(ConfirmationContext::ArchiveWorkspace(workspace_id)),
+                        );
+                        self.state.input_mode = InputMode::Confirming;
+                    }
+                    Err(err) => {
+                        self.state.confirmation_dialog_state.hide();
+                        self.show_error("Archive Failed", &err);
+                    }
+                }
+            }
+            AppEvent::RemoveProjectDialogPreflightCompleted { repo_id, result } => {
+                let is_active_preflight = self.state.confirmation_dialog_state.loading
+                    && matches!(
+                        self.state.confirmation_dialog_state.context,
+                        Some(ConfirmationContext::RemoveProjectPreflightInProgress {
+                            repo_id: id
+                        }) if id == repo_id
+                    );
+                if !is_active_preflight {
+                    return Ok(effects);
+                }
+
+                match result {
+                    Ok(preflight) => {
+                        let confirmation_type = match (preflight.has_dirty, preflight.has_unmerged)
+                        {
+                            (true, true) => ConfirmationType::Danger,
+                            (true, false) | (false, true) => ConfirmationType::Warning,
+                            (false, false) => {
+                                if preflight.workspace_count > 0 {
+                                    ConfirmationType::Warning
+                                } else {
+                                    ConfirmationType::Info
+                                }
+                            }
+                        };
+
+                        self.state.confirmation_dialog_state.show(
+                            format!("Remove \"{}\"?", preflight.repo_name),
+                            "This will archive all workspaces and remove the project.",
+                            preflight.warnings,
+                            confirmation_type,
+                            "Remove",
+                            Some(ConfirmationContext::RemoveProject(repo_id)),
+                        );
+                        self.state.input_mode = InputMode::Confirming;
+                    }
+                    Err(err) => {
+                        self.state.confirmation_dialog_state.hide();
+                        self.show_error("Project Removal Failed", &err);
+                    }
+                }
+            }
+            AppEvent::ForkSessionDialogPreflightCompleted {
+                parent_workspace_id,
+                result,
+            } => {
+                let is_active_preflight = self.state.confirmation_dialog_state.loading
+                    && matches!(
+                        self.state.confirmation_dialog_state.context,
+                        Some(ConfirmationContext::ForkSessionPreflightInProgress {
+                            parent_workspace_id: id
+                        }) if id == parent_workspace_id
+                    );
+                if !is_active_preflight {
+                    return Ok(effects);
+                }
+
+                match result {
+                    Ok(preflight) => {
+                        let Some(pending) = self.state.pending_fork_request.clone() else {
+                            self.state.confirmation_dialog_state.hide();
+                            self.state.input_mode = InputMode::Normal;
+                            return Ok(effects);
+                        };
+
+                        if pending.parent_workspace_id != parent_workspace_id {
+                            return Ok(effects);
+                        }
+
+                        let usage_pct = if pending.context_window > 0 {
+                            (pending.token_estimate as f64 / pending.context_window as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+
+                        let mut warnings = Vec::new();
+                        let has_dirty = if let Some(desc) = preflight.dirty_warning {
+                            warnings.push(desc);
+                            warnings.push("Commit before forking to preserve changes.".to_string());
+                            true
+                        } else {
+                            false
+                        };
+
+                        if usage_pct >= 100.0 {
+                            warnings.push(format!(
+                                "Seed exceeds context window ({} / {} tokens, ~{:.0}%).",
+                                pending.token_estimate, pending.context_window, usage_pct
+                            ));
+                        } else if usage_pct >= 80.0 {
+                            warnings.push(format!(
+                                "Seed uses ~{:.0}% of context window ({} / {}).",
+                                usage_pct, pending.token_estimate, pending.context_window
+                            ));
+                        }
+
+                        let confirmation_type = if usage_pct >= 100.0 {
+                            ConfirmationType::Danger
+                        } else if has_dirty || usage_pct >= 80.0 {
+                            ConfirmationType::Warning
+                        } else {
+                            ConfirmationType::Info
+                        };
+
+                        let message = format!(
+                            "Fork this session into a new workspace based on branch \"{}\".\nSeed size: {} / {} tokens (~{:.0}%).",
+                            preflight.base_branch,
+                            pending.token_estimate,
+                            pending.context_window,
+                            usage_pct
+                        );
+
+                        self.state.confirmation_dialog_state.show(
+                            "Fork session?",
+                            message,
+                            warnings,
+                            confirmation_type,
+                            "Fork",
+                            Some(ConfirmationContext::ForkSession {
+                                parent_workspace_id,
+                                base_branch: preflight.base_branch,
+                            }),
+                        );
+                        self.state.input_mode = InputMode::Confirming;
+                    }
+                    Err(err) => {
+                        self.state.pending_fork_request = None;
+                        self.state.confirmation_dialog_state.hide();
+                        self.show_error("Fork Failed", &err);
+                    }
+                }
+            }
             AppEvent::ArchiveWorkspacePreflightCompleted {
                 workspace_id,
                 result,
@@ -5699,6 +5935,29 @@ impl App {
                     }
                     Err(err) => {
                         self.show_error("Archive Failed", &err);
+                    }
+                }
+            }
+            AppEvent::ProjectsDiscovered { base_dir, result } => {
+                if !self.state.project_picker_state.visible
+                    || self.state.project_picker_state.base_dir != base_dir
+                {
+                    return Ok(effects);
+                }
+
+                match result {
+                    Ok(entries) => {
+                        let projects: Vec<ProjectEntry> = entries
+                            .into_iter()
+                            .map(|entry| ProjectEntry {
+                                name: entry.name,
+                                path: entry.path,
+                            })
+                            .collect();
+                        self.state.project_picker_state.load_projects(projects);
+                    }
+                    Err(err) => {
+                        self.state.project_picker_state.set_error(err);
                     }
                 }
             }
@@ -7972,81 +8231,13 @@ impl App {
             return;
         }
 
-        let workspace_dao = match self.workspace_dao() {
-            Some(dao) => dao,
-            None => {
-                self.show_error("Cannot Fork", "Workspace database unavailable.");
-                return;
-            }
-        };
-
-        let Ok(Some(workspace)) = workspace_dao.get_by_id(parent_workspace_id) else {
-            self.show_error("Cannot Fork", "Workspace not found.");
-            return;
-        };
-
-        // Get actual current branch for display (may differ from stored workspace.branch)
-        let base_branch = self
-            .worktree_manager()
-            .get_current_branch(&workspace.path)
-            .unwrap_or_else(|_| workspace.branch.clone());
-
         let seed_prompt = app_prompt::build_fork_seed_prompt(session.chat_view.messages());
-
         let model_id = session
             .model
             .clone()
             .unwrap_or_else(|| ModelRegistry::default_model(session.agent_type));
         let context_window = ModelRegistry::context_window(session.agent_type, &model_id);
         let token_estimate = Self::estimate_tokens(&seed_prompt);
-        let usage_pct = if context_window > 0 {
-            (token_estimate as f64 / context_window as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let mut warnings = Vec::new();
-        let mut has_dirty = false;
-
-        if let Ok(status) = self.worktree_manager().get_branch_status(&workspace.path) {
-            if status.is_dirty {
-                has_dirty = true;
-                if let Some(desc) = &status.dirty_description {
-                    warnings.push(desc.clone());
-                } else {
-                    warnings.push("Uncommitted changes detected".to_string());
-                }
-                warnings.push("Commit before forking to preserve changes.".to_string());
-            }
-        }
-
-        if usage_pct >= 100.0 {
-            warnings.push(format!(
-                "Seed exceeds context window ({} / {} tokens, ~{:.0}%).",
-                token_estimate, context_window, usage_pct
-            ));
-        } else if usage_pct >= 80.0 {
-            warnings.push(format!(
-                "Seed uses ~{:.0}% of context window ({} / {}).",
-                usage_pct, token_estimate, context_window
-            ));
-        }
-
-        let confirmation_type = if usage_pct >= 100.0 {
-            ConfirmationType::Danger
-        } else if has_dirty || usage_pct >= 80.0 {
-            ConfirmationType::Warning
-        } else {
-            ConfirmationType::Info
-        };
-
-        let message = format!(
-            "Fork this session into a new workspace based on branch \"{}\".\nSeed size: {} / {} tokens (~{:.0}%).",
-            base_branch,
-            token_estimate,
-            context_window,
-            usage_pct
-        );
 
         self.state.pending_fork_request = Some(PendingForkRequest {
             agent_type: session.agent_type,
@@ -8064,19 +8255,50 @@ impl App {
             fork_seed_id: None,
         });
 
-        self.state.close_overlays();
-        self.state.confirmation_dialog_state.show(
-            "Fork session?",
-            message,
-            warnings,
-            confirmation_type,
-            "Fork",
-            Some(ConfirmationContext::ForkSession {
+        self.show_blocking_confirmation_loading(
+            "Fork Session",
+            "Analyzing workspace state...",
+            ConfirmationContext::ForkSessionPreflightInProgress {
                 parent_workspace_id,
-                base_branch: base_branch.clone(),
-            }),
+            },
         );
-        self.state.input_mode = InputMode::Confirming;
+
+        let workspace_dao = self.workspace_dao_clone();
+        let worktree_manager = self.worktree_manager().clone();
+        self.spawn_blocking_preflight(
+            move || {
+                let workspace_dao =
+                    workspace_dao.ok_or_else(|| "Workspace database unavailable".to_string())?;
+
+                let workspace = workspace_dao
+                    .get_by_id(parent_workspace_id)
+                    .map_err(|e| format!("Failed to load workspace: {}", e))?
+                    .ok_or_else(|| "Workspace not found.".to_string())?;
+
+                let base_branch = worktree_manager
+                    .get_current_branch(&workspace.path)
+                    .unwrap_or_else(|_| workspace.branch.clone());
+
+                let dirty_warning = match worktree_manager.get_branch_status(&workspace.path) {
+                    Ok(status) if status.is_dirty => Some(
+                        status
+                            .dirty_description
+                            .unwrap_or_else(|| "Uncommitted changes detected".to_string()),
+                    ),
+                    _ => None,
+                };
+
+                Ok(ForkSessionDialogPreflightResult {
+                    base_branch,
+                    dirty_warning,
+                })
+            },
+            move |result| AppEvent::ForkSessionDialogPreflightCompleted {
+                parent_workspace_id,
+                result,
+            },
+            "fork_session_dialog_preflight_completed",
+        );
     }
 
     /// Execute fork session after confirmation
@@ -10996,6 +11218,211 @@ mod tests {
         assert!(app.state.confirmation_dialog_state.visible);
         assert!(app.state.confirmation_dialog_state.loading);
         assert_eq!(app.state.input_mode, InputMode::Confirming);
+    }
+
+    #[test]
+    fn test_handle_dialog_cancel_keeps_remove_project_preflight_loading_visible() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let repo_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Remove Project",
+                "Analyzing project workspaces...",
+                Some(ConfirmationContext::RemoveProjectPreflightInProgress { repo_id }),
+            );
+
+        app.handle_dialog_action(Action::Cancel);
+
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(app.state.confirmation_dialog_state.loading);
+        assert!(matches!(
+            app.state.confirmation_dialog_state.context,
+            Some(ConfirmationContext::RemoveProjectPreflightInProgress {
+                repo_id: id
+            }) if id == repo_id
+        ));
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+    }
+
+    #[test]
+    fn test_handle_dialog_cancel_keeps_fork_preflight_loading_visible() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let parent_workspace_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Fork Session",
+                "Analyzing workspace state...",
+                Some(ConfirmationContext::ForkSessionPreflightInProgress {
+                    parent_workspace_id,
+                }),
+            );
+
+        app.handle_dialog_action(Action::Cancel);
+
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(app.state.confirmation_dialog_state.loading);
+        assert!(matches!(
+            app.state.confirmation_dialog_state.context,
+            Some(ConfirmationContext::ForkSessionPreflightInProgress {
+                parent_workspace_id: id
+            }) if id == parent_workspace_id
+        ));
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+    }
+
+    #[tokio::test]
+    async fn test_archive_workspace_dialog_preflight_completed_shows_confirmation() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let workspace_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Archive Workspace",
+                "Analyzing workspace...",
+                Some(ConfirmationContext::ArchiveWorkspacePreflightInProgress { workspace_id }),
+            );
+
+        let event = AppEvent::ArchiveWorkspaceDialogPreflightCompleted {
+            workspace_id,
+            result: Ok(ArchiveWorkspaceDialogPreflightResult {
+                workspace_name: "free-rain".to_string(),
+                message: "This will remove the worktree.".to_string(),
+                warnings: vec!["Uncommitted changes".to_string()],
+                has_dirty: true,
+                has_unmerged: false,
+            }),
+        };
+
+        let effects = app.handle_app_event(event).await.unwrap();
+        assert!(effects.is_empty());
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(!app.state.confirmation_dialog_state.loading);
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+        assert!(matches!(
+            app.state.confirmation_dialog_state.context,
+            Some(ConfirmationContext::ArchiveWorkspace(id)) if id == workspace_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_remove_project_dialog_preflight_completed_shows_confirmation() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let repo_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Remove Project",
+                "Analyzing project workspaces...",
+                Some(ConfirmationContext::RemoveProjectPreflightInProgress { repo_id }),
+            );
+
+        let event = AppEvent::RemoveProjectDialogPreflightCompleted {
+            repo_id,
+            result: Ok(RemoveProjectDialogPreflightResult {
+                repo_name: "demo-repo".to_string(),
+                warnings: vec!["2 workspaces will be archived".to_string()],
+                has_dirty: false,
+                has_unmerged: false,
+                workspace_count: 2,
+            }),
+        };
+
+        let effects = app.handle_app_event(event).await.unwrap();
+        assert!(effects.is_empty());
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(!app.state.confirmation_dialog_state.loading);
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+        assert!(matches!(
+            app.state.confirmation_dialog_state.context,
+            Some(ConfirmationContext::RemoveProject(id)) if id == repo_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_fork_session_dialog_preflight_completed_shows_confirmation() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let parent_workspace_id = Uuid::new_v4();
+        app.state.input_mode = InputMode::Confirming;
+        app.state
+            .confirmation_dialog_state
+            .show_loading_with_context(
+                "Fork Session",
+                "Analyzing workspace state...",
+                Some(ConfirmationContext::ForkSessionPreflightInProgress {
+                    parent_workspace_id,
+                }),
+            );
+        app.state.pending_fork_request = Some(PendingForkRequest {
+            agent_type: AgentType::Codex,
+            agent_mode: crate::agent::AgentMode::Build,
+            model: Some("o3".to_string()),
+            reasoning_effort: None,
+            parent_session_id: None,
+            parent_workspace_id,
+            seed_prompt: std::sync::Arc::from("seed prompt"),
+            token_estimate: 1600,
+            context_window: 2000,
+            fork_seed_id: None,
+        });
+
+        let event = AppEvent::ForkSessionDialogPreflightCompleted {
+            parent_workspace_id,
+            result: Ok(ForkSessionDialogPreflightResult {
+                base_branch: "feature/branch".to_string(),
+                dirty_warning: Some("Uncommitted changes detected".to_string()),
+            }),
+        };
+
+        let effects = app.handle_app_event(event).await.unwrap();
+        assert!(effects.is_empty());
+        assert!(app.state.confirmation_dialog_state.visible);
+        assert!(!app.state.confirmation_dialog_state.loading);
+        assert_eq!(app.state.input_mode, InputMode::Confirming);
+        assert!(matches!(
+            app.state.confirmation_dialog_state.context,
+            Some(ConfirmationContext::ForkSession {
+                parent_workspace_id: id,
+                base_branch
+            }) if id == parent_workspace_id && base_branch == "feature/branch"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_projects_discovered_populates_picker() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let base_dir = PathBuf::from("/tmp/projects");
+        app.state
+            .project_picker_state
+            .show_loading(base_dir.clone());
+        app.state.input_mode = InputMode::PickingProject;
+
+        let event = AppEvent::ProjectsDiscovered {
+            base_dir: base_dir.clone(),
+            result: Ok(vec![
+                ProjectDiscoveryEntry {
+                    name: "alpha".to_string(),
+                    path: base_dir.join("alpha"),
+                },
+                ProjectDiscoveryEntry {
+                    name: "beta".to_string(),
+                    path: base_dir.join("beta"),
+                },
+            ]),
+        };
+
+        let effects = app.handle_app_event(event).await.unwrap();
+        assert!(effects.is_empty());
+        assert!(app.state.project_picker_state.visible);
+        assert!(!app.state.project_picker_state.loading);
+        assert_eq!(app.state.project_picker_state.projects.len(), 2);
+        assert_eq!(app.state.project_picker_state.projects[0].name, "alpha");
+        assert_eq!(app.state.project_picker_state.projects[1].name, "beta");
     }
 
     #[test]

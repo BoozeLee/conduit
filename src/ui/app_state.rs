@@ -443,6 +443,10 @@ impl AppState {
         if self.session_import_state.visible && self.session_import_state.loading {
             return true;
         }
+        // Project picker loading spinner is animating
+        if self.project_picker_state.visible && self.project_picker_state.loading {
+            return true;
+        }
         // Logo shine on splash screen
         if self.tab_manager.is_empty() {
             return true;

@@ -56,8 +56,27 @@ pub enum ConfirmationContext {
     SelectWorkspaceMode { repo_id: Uuid },
     /// Confirm whether to delete a remote branch after archive
     ArchiveWorkspaceRemoteDelete { workspace_id: Uuid },
+    /// Archive confirmation preflight is running.
+    ArchiveWorkspacePreflightInProgress { workspace_id: Uuid },
     /// Archive is currently running; dialog is informational and non-interactive.
     ArchiveWorkspaceInProgress { workspace_id: Uuid },
+    /// Remove-project confirmation preflight is running.
+    RemoveProjectPreflightInProgress { repo_id: Uuid },
+    /// Fork-session confirmation preflight is running.
+    ForkSessionPreflightInProgress { parent_workspace_id: Uuid },
+}
+
+impl ConfirmationContext {
+    /// Whether this context is a non-dismissible loading operation.
+    pub fn is_blocking_loading(&self) -> bool {
+        matches!(
+            self,
+            ConfirmationContext::ArchiveWorkspacePreflightInProgress { .. }
+                | ConfirmationContext::ArchiveWorkspaceInProgress { .. }
+                | ConfirmationContext::RemoveProjectPreflightInProgress { .. }
+                | ConfirmationContext::ForkSessionPreflightInProgress { .. }
+        )
+    }
 }
 
 impl ConfirmationType {
@@ -274,10 +293,12 @@ impl Widget for ConfirmationDialog<'_> {
             let dialog_width: u16 = 50;
             let dialog_height: u16 = 7; // Compact: border(2) + top_padding(1) + spinner area
 
-            let instructions = if matches!(
-                self.state.context,
-                Some(ConfirmationContext::ArchiveWorkspaceInProgress { .. })
-            ) {
+            let instructions = if self
+                .state
+                .context
+                .as_ref()
+                .is_some_and(ConfirmationContext::is_blocking_loading)
+            {
                 Vec::new()
             } else {
                 vec![("Esc", "Cancel")]

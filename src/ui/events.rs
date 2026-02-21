@@ -103,10 +103,34 @@ pub enum AppEvent {
         result: Result<WorkspaceArchived, String>,
     },
 
+    /// Archive-dialog preflight completed.
+    ArchiveWorkspaceDialogPreflightCompleted {
+        workspace_id: Uuid,
+        result: Result<ArchiveWorkspaceDialogPreflightResult, String>,
+    },
+
     /// Archive preflight completed (remote branch prompt check)
     ArchiveWorkspacePreflightCompleted {
         workspace_id: Uuid,
         result: Result<ArchiveWorkspacePreflightResult, String>,
+    },
+
+    /// Remove-project dialog preflight completed.
+    RemoveProjectDialogPreflightCompleted {
+        repo_id: Uuid,
+        result: Result<RemoveProjectDialogPreflightResult, String>,
+    },
+
+    /// Fork-session dialog preflight completed.
+    ForkSessionDialogPreflightCompleted {
+        parent_workspace_id: Uuid,
+        result: Result<ForkSessionDialogPreflightResult, String>,
+    },
+
+    /// Project picker scan completed.
+    ProjectsDiscovered {
+        base_dir: PathBuf,
+        result: Result<Vec<ProjectDiscoveryEntry>, String>,
     },
 
     /// Project removal completed
@@ -192,8 +216,38 @@ pub struct WorkspaceArchived {
 }
 
 #[derive(Debug, Clone)]
+pub struct ArchiveWorkspaceDialogPreflightResult {
+    pub workspace_name: String,
+    pub message: String,
+    pub warnings: Vec<String>,
+    pub has_dirty: bool,
+    pub has_unmerged: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct ArchiveWorkspacePreflightResult {
     pub should_prompt_remote_delete: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoveProjectDialogPreflightResult {
+    pub repo_name: String,
+    pub warnings: Vec<String>,
+    pub has_dirty: bool,
+    pub has_unmerged: bool,
+    pub workspace_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForkSessionDialogPreflightResult {
+    pub base_branch: String,
+    pub dirty_warning: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectDiscoveryEntry {
+    pub name: String,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone)]

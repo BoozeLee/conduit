@@ -213,13 +213,11 @@ impl App {
                     }
                     let base_path = self.state.base_dir_dialog_state.expanded_path();
                     self.state.base_dir_dialog_state.hide();
-                    self.state.close_overlays();
-                    self.state.project_picker_state.show(base_path);
-                    self.state.input_mode = InputMode::PickingProject;
+                    self.start_project_discovery(base_path);
                 }
             }
             InputMode::Confirming => {
-                if self.is_archive_progress_dialog() {
+                if self.is_blocking_confirmation_loading_dialog() {
                     return Ok(());
                 }
                 if let Some(context) = self.state.confirmation_dialog_state.context.clone() {
@@ -262,6 +260,9 @@ impl App {
                         ConfirmationContext::ArchiveWorkspaceInProgress { .. } => {
                             return Ok(());
                         }
+                        ConfirmationContext::ArchiveWorkspacePreflightInProgress { .. } => {
+                            return Ok(());
+                        }
                         ConfirmationContext::RemoveProject(id) => {
                             if self.state.confirmation_dialog_state.is_confirm_selected() {
                                 effects.push(self.execute_remove_project(id));
@@ -269,6 +270,9 @@ impl App {
                                 self.state.input_mode = InputMode::SidebarNavigation;
                                 return Ok(());
                             }
+                        }
+                        ConfirmationContext::RemoveProjectPreflightInProgress { .. } => {
+                            return Ok(());
                         }
                         ConfirmationContext::CreatePullRequest {
                             tab_index,
@@ -316,6 +320,9 @@ impl App {
                                 }
                                 return Ok(());
                             }
+                        }
+                        ConfirmationContext::ForkSessionPreflightInProgress { .. } => {
+                            return Ok(());
                         }
                     }
                 }
