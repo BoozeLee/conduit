@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -223,8 +224,10 @@ pub struct AppState {
     pub busy_footer_message: Option<String>,
     /// Pending branch updates captured while workspaces are busy
     pub pending_branch_updates: HashMap<Uuid, Option<String>>,
-    /// Continue onboarding to base-dir after providers selection is confirmed
-    pub pending_onboarding_base_dir_after_providers: bool,
+    /// Pending Ctrl+N flow target while onboarding gates are being completed
+    pub pending_new_project_target: Option<NewProjectTarget>,
+    /// Current behavior context for the model picker
+    pub model_picker_context: ModelPickerContext,
 }
 
 /// Pending fork request data captured before workspace creation
@@ -276,6 +279,18 @@ pub enum ScrollDragTarget {
 pub enum SelectionDragTarget {
     Chat,
     Input,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewProjectTarget {
+    ProjectPicker(PathBuf),
+    BaseDirDialog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelPickerContext {
+    SessionSelection,
+    OnboardingDefaultSelection,
 }
 
 impl AppState {
@@ -336,7 +351,8 @@ impl AppState {
             busy_footer_message_active: false,
             busy_footer_message: None,
             pending_branch_updates: HashMap::new(),
-            pending_onboarding_base_dir_after_providers: false,
+            pending_new_project_target: None,
+            model_picker_context: ModelPickerContext::SessionSelection,
         }
     }
 
@@ -346,6 +362,7 @@ impl AppState {
         self.project_picker_state.hide();
         self.session_import_state.hide();
         self.model_selector_state.hide();
+        self.model_picker_context = ModelPickerContext::SessionSelection;
         self.reasoning_selector_state.hide();
         self.theme_picker_state.hide(true); // cancelled=true since we're closing all overlays
         self.agent_selector_state.hide();

@@ -199,6 +199,7 @@ When customizing keybindings in `config.toml`:
 Some key combinations may not work in all terminals:
 
 - **Ctrl+\\** is often reported as `Ctrl+4` — use `conduit debug-keys` to check
+- **Ctrl+M** may be sent instead of `Enter` in some terminals/tmux setups
 - **Ctrl+Shift** combinations may not be recognized by all terminals
 - **Alt** key behavior varies (some terminals use Escape prefix)
 

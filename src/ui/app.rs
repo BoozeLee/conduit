@@ -46,7 +46,7 @@ use crate::git::{PrManager, PrStatus, WorkspaceMode, WorkspaceRepoManager};
 use crate::ui::action::Action;
 use crate::ui::app_prompt;
 use crate::ui::app_queue;
-use crate::ui::app_state::{AppState, PendingForkRequest};
+use crate::ui::app_state::{AppState, ModelPickerContext, NewProjectTarget, PendingForkRequest};
 use crate::ui::capabilities::AgentCapabilities;
 use crate::ui::components::{
     dialog_content_area, AddRepoDialog, AgentSelector, BaseDirDialog, ChatMessage, CommandPalette,
@@ -1834,6 +1834,18 @@ impl App {
                 self.handle_list_action(action);
             }
             Action::Confirm => {
+                // Defensive normalization: when overlay visibility and input mode diverge,
+                // prioritize the top-most visible modal for confirm handling.
+                if self.state.model_selector_state.is_visible()
+                    && self.state.input_mode != InputMode::SelectingModel
+                {
+                    self.state.input_mode = InputMode::SelectingModel;
+                } else if self.state.provider_selector_state.is_visible()
+                    && self.state.input_mode != InputMode::SelectingProviders
+                {
+                    self.state.input_mode = InputMode::SelectingProviders;
+                }
+
                 if self.state.input_mode == InputMode::SlashMenu {
                     if let Some(entry) = self.state.slash_menu_state.selected_entry() {
                         let command = entry.command;
@@ -1894,26 +1906,13 @@ impl App {
             Action::SetDefaultModel => {
                 if self.state.input_mode == InputMode::SelectingModel {
                     if let Some(model) = self.state.model_selector_state.selected_model().cloned() {
-                        let model_id = model.id.clone();
-                        let agent_type = model.agent_type;
-                        self.state
-                            .model_selector_state
-                            .set_default_model(agent_type, model_id.clone());
-                        if let Err(err) = crate::core::services::ConfigService::set_default_model(
-                            &mut self.core,
-                            agent_type,
-                            &model_id,
-                        ) {
-                            tracing::warn!(error = %err, "Failed to save default model");
-                            self.state.set_timed_footer_message(
-                                format!("Failed to save default model: {err}"),
-                                Duration::from_secs(5),
-                            );
-                        } else {
-                            self.state.set_timed_footer_message(
-                                format!("Default model set to: {}", model.display_name),
-                                Duration::from_secs(5),
-                            );
+                        if self.persist_default_model_selection(&model)
+                            && self.state.model_picker_context
+                                == ModelPickerContext::OnboardingDefaultSelection
+                        {
+                            self.state.model_selector_state.hide();
+                            self.state.model_picker_context = ModelPickerContext::SessionSelection;
+                            self.continue_new_project_flow();
                         }
                     }
                 }
@@ -3603,13 +3602,11 @@ impl App {
         }
     }
 
-    fn open_project_picker_or_base_dir(&mut self) {
+    fn resolve_new_project_target(&self) -> NewProjectTarget {
         let base_dir = self
             .app_state_dao()
             .and_then(|dao| dao.get("projects_base_dir").ok().flatten());
 
-        self.state.pending_onboarding_base_dir_after_providers = false;
-        self.state.close_overlays();
         if let Some(base_dir_str) = base_dir {
             let base_path = if base_dir_str.starts_with('~') {
                 dirs::home_dir()
@@ -3618,21 +3615,114 @@ impl App {
             } else {
                 PathBuf::from(&base_dir_str)
             };
-            self.state.project_picker_state.show(base_path);
-            self.state.input_mode = InputMode::PickingProject;
-        } else if self.config().enabled_providers.is_none() {
-            self.state.provider_selector_state =
-                crate::ui::components::ProviderSelectorState::configure_for(
-                    self.config(),
-                    self.tools(),
-                );
-            self.state.provider_selector_state.show();
-            self.state.pending_onboarding_base_dir_after_providers = true;
-            self.state.input_mode = InputMode::SelectingProviders;
+            NewProjectTarget::ProjectPicker(base_path)
         } else {
-            self.state.base_dir_dialog_state.show();
-            self.state.input_mode = InputMode::SettingBaseDir;
+            NewProjectTarget::BaseDirDialog
         }
+    }
+
+    fn open_new_project_target(&mut self, target: NewProjectTarget) {
+        match target {
+            NewProjectTarget::ProjectPicker(base_path) => {
+                self.state.project_picker_state.show(base_path);
+                self.state.input_mode = InputMode::PickingProject;
+            }
+            NewProjectTarget::BaseDirDialog => {
+                self.state.base_dir_dialog_state.show();
+                self.state.input_mode = InputMode::SettingBaseDir;
+            }
+        }
+    }
+
+    fn show_onboarding_provider_selector(&mut self) {
+        self.state.provider_selector_state =
+            crate::ui::components::ProviderSelectorState::configure_for(
+                self.config(),
+                self.tools(),
+            );
+        self.state.provider_selector_state.show();
+        self.state.input_mode = InputMode::SelectingProviders;
+    }
+
+    fn show_onboarding_model_selector(&mut self) -> bool {
+        let allowed = self.config().effective_enabled_providers(self.tools());
+        if allowed.is_empty() {
+            self.state.set_timed_footer_message(
+                "No enabled providers available. Use /providers.".to_string(),
+                Duration::from_secs(4),
+            );
+            self.state.pending_new_project_target = None;
+            self.state.input_mode = InputMode::Normal;
+            return false;
+        }
+
+        self.state
+            .model_selector_state
+            .set_allowed_providers(Some(allowed));
+        self.state.model_selector_state.show_with_title(
+            None,
+            DefaultModelSelection::default(),
+            "Pick your default model".to_string(),
+        );
+        self.state.model_picker_context = ModelPickerContext::OnboardingDefaultSelection;
+        self.state.input_mode = InputMode::SelectingModel;
+        true
+    }
+
+    fn continue_new_project_flow(&mut self) {
+        if self.state.pending_new_project_target.is_none() {
+            self.state.input_mode = InputMode::Normal;
+            return;
+        }
+
+        if self.config().enabled_providers.is_none() {
+            self.show_onboarding_provider_selector();
+            return;
+        }
+
+        if self.config().default_model.is_none() {
+            let _ = self.show_onboarding_model_selector();
+            return;
+        }
+
+        if let Some(target) = self.state.pending_new_project_target.take() {
+            self.open_new_project_target(target);
+        } else {
+            self.state.input_mode = InputMode::Normal;
+        }
+    }
+
+    fn persist_default_model_selection(&mut self, model: &crate::agent::ModelInfo) -> bool {
+        let model_id = model.id.clone();
+        let agent_type = model.agent_type;
+        self.state
+            .model_selector_state
+            .set_default_model(agent_type, model_id.clone());
+
+        if let Err(err) = crate::core::services::ConfigService::set_default_model(
+            &mut self.core,
+            agent_type,
+            &model_id,
+        ) {
+            tracing::warn!(error = %err, "Failed to save default model");
+            self.state.set_timed_footer_message(
+                format!("Failed to save default model: {err}"),
+                Duration::from_secs(5),
+            );
+            return false;
+        }
+
+        self.state.set_timed_footer_message(
+            format!("Default model set to: {}", model.display_name),
+            Duration::from_secs(5),
+        );
+        true
+    }
+
+    fn open_project_picker_or_base_dir(&mut self) {
+        self.state.close_overlays();
+        self.state.pending_new_project_target = Some(self.resolve_new_project_target());
+        self.continue_new_project_flow();
     }
 
     /// Show missing tool dialog and enter MissingTool mode.
@@ -4938,6 +5028,7 @@ impl App {
                     self.state.close_overlays();
                     let defaults = self.model_selector_defaults();
                     self.state.model_selector_state.show(model, defaults);
+                    self.state.model_picker_context = ModelPickerContext::SessionSelection;
                     self.state.input_mode = InputMode::SelectingModel;
                 }
             }
@@ -4966,6 +5057,7 @@ impl App {
                     self.state.close_overlays();
                     let defaults = self.model_selector_defaults();
                     self.state.model_selector_state.show(model, defaults);
+                    self.state.model_picker_context = ModelPickerContext::SessionSelection;
                     self.state.input_mode = InputMode::SelectingModel;
                 }
             }
@@ -5059,6 +5151,10 @@ impl App {
             || y >= dialog_area.y + dialog_area.height
         {
             self.state.model_selector_state.hide();
+            if self.state.model_picker_context == ModelPickerContext::OnboardingDefaultSelection {
+                self.state.pending_new_project_target = None;
+            }
+            self.state.model_picker_context = ModelPickerContext::SessionSelection;
             self.state.input_mode = InputMode::Normal;
             return None;
         }
@@ -5089,6 +5185,17 @@ impl App {
                         return None;
                     }
 
+                    if self.state.model_picker_context
+                        == ModelPickerContext::OnboardingDefaultSelection
+                    {
+                        if self.persist_default_model_selection(&model) {
+                            self.state.model_selector_state.hide();
+                            self.state.model_picker_context = ModelPickerContext::SessionSelection;
+                            self.continue_new_project_flow();
+                        }
+                        return None;
+                    }
+
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
                         if Self::reject_cross_agent_switch(session, model.agent_type) {
                             return None;
@@ -5109,6 +5216,7 @@ impl App {
                     }
                 }
                 self.state.model_selector_state.hide();
+                self.state.model_picker_context = ModelPickerContext::SessionSelection;
                 self.state.input_mode = InputMode::Normal;
             }
         }
@@ -5193,7 +5301,7 @@ impl App {
 
         if !Self::point_in_rect(x, y, dialog_area) {
             self.state.provider_selector_state.hide();
-            self.state.pending_onboarding_base_dir_after_providers = false;
+            self.state.pending_new_project_target = None;
             self.state.input_mode = InputMode::Normal;
             return;
         }
@@ -10187,6 +10295,35 @@ mod tests {
     }
 
     #[test]
+    fn test_first_time_splash_shortcuts_only_active_in_normal_without_overlay() {
+        assert!(App::should_handle_first_time_splash_shortcuts(
+            true,
+            InputMode::Normal,
+            false
+        ));
+        assert!(App::should_handle_first_time_splash_shortcuts(
+            true,
+            InputMode::Scrolling,
+            false
+        ));
+        assert!(!App::should_handle_first_time_splash_shortcuts(
+            true,
+            InputMode::SelectingModel,
+            false
+        ));
+        assert!(!App::should_handle_first_time_splash_shortcuts(
+            true,
+            InputMode::Normal,
+            true
+        ));
+        assert!(!App::should_handle_first_time_splash_shortcuts(
+            false,
+            InputMode::Normal,
+            false
+        ));
+    }
+
+    #[test]
     fn test_build_fork_seed_prompt_includes_roles() {
         use crate::ui::components::ChatMessage;
 
@@ -10908,6 +11045,38 @@ mod tests {
             .active_session()
             .expect("session missing");
         assert_eq!(session.reasoning_effort, Some(ReasoningEffort::XHigh));
+    }
+
+    #[test]
+    fn test_handle_confirm_action_model_selector_wins_over_stale_mode() {
+        let mut app = build_test_app_with_sessions(&[]);
+        let executable = std::env::current_exe().expect("test executable path");
+        assert!(app.tools_mut().update_tool(Tool::Claude, executable));
+        app.config_mut()
+            .set_enabled_providers(vec![AgentType::Claude]);
+
+        app.state.pending_new_project_target = Some(NewProjectTarget::BaseDirDialog);
+        app.state.model_picker_context = ModelPickerContext::OnboardingDefaultSelection;
+        app.state
+            .model_selector_state
+            .set_allowed_providers(Some(vec![AgentType::Claude]));
+        app.state.model_selector_state.show_with_title(
+            None,
+            DefaultModelSelection::default(),
+            "Pick your default model".to_string(),
+        );
+        // Simulate stale mode mismatch observed in TUI.
+        app.state.input_mode = InputMode::SelectingProviders;
+
+        let mut effects = Vec::new();
+        app.handle_confirm_action(&mut effects).unwrap();
+
+        assert!(effects.is_empty());
+        assert_eq!(app.config().default_agent, AgentType::Claude);
+        assert_eq!(app.config().default_model.as_deref(), Some("opus"));
+        assert_eq!(app.state.input_mode, InputMode::SettingBaseDir);
+        assert!(!app.state.model_selector_state.is_visible());
+        assert!(app.state.pending_new_project_target.is_none());
     }
 
     #[test]

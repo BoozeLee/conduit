@@ -42,10 +42,38 @@ impl App {
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         guard: &mut TerminalGuard,
     ) -> anyhow::Result<Vec<Effect>> {
+        let mut key = key;
+
+        // Some terminals can emit CR/LF as plain chars instead of KeyCode::Enter.
+        // Normalize these for consistent keybinding behavior across environments.
+        if key.modifiers.is_empty() && matches!(key.code, KeyCode::Char('\r') | KeyCode::Char('\n'))
+        {
+            key.code = KeyCode::Enter;
+        } else if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('m') {
+            key.code = KeyCode::Enter;
+            key.modifiers = KeyModifiers::NONE;
+        }
+
         // Special handling for modes that bypass normal key processing
         if self.state.input_mode == InputMode::RemovingProject {
             // Ignore all input while removing project
             return Ok(Vec::new());
+        }
+
+        // Defensive normalization: when an overlay is visible, force the matching
+        // input mode so key context lookup targets the active modal.
+        if self.state.model_selector_state.is_visible() {
+            self.state.input_mode = InputMode::SelectingModel;
+        } else if self.state.reasoning_selector_state.is_visible() {
+            self.state.input_mode = InputMode::SelectingReasoning;
+        } else if self.state.provider_selector_state.is_visible() {
+            self.state.input_mode = InputMode::SelectingProviders;
+        } else if self.state.project_picker_state.is_visible() {
+            self.state.input_mode = InputMode::PickingProject;
+        } else if self.state.base_dir_dialog_state.path.is_visible() {
+            self.state.input_mode = InputMode::SettingBaseDir;
+        } else if self.state.add_repo_dialog_state.path.is_visible() {
+            self.state.input_mode = InputMode::AddingRepository;
         }
 
         // Handle Ctrl+C with double-press detection (global)
@@ -293,16 +321,13 @@ impl App {
             return Ok(Vec::new());
         }
 
-        // First-time splash screen handling (only when no dialogs are visible)
-        if self.state.show_first_time_splash
-            && !self.state.command_palette_state.is_visible()
-            && !self.state.base_dir_dialog_state.is_visible()
-            && !self.state.project_picker_state.is_visible()
-            && !self.state.add_repo_dialog_state.is_visible()
-            && self.state.input_mode != InputMode::SelectingAgent
-            && self.state.input_mode != InputMode::SelectingProviders
-            && self.state.input_mode != InputMode::ShowingError
-        {
+        // First-time splash screen shortcuts are only active in regular chat/scroll modes.
+        // This prevents Enter from being hijacked while an onboarding modal is open.
+        if Self::should_handle_first_time_splash_shortcuts(
+            self.state.show_first_time_splash,
+            self.state.input_mode,
+            self.has_active_dialog(),
+        ) {
             // Handle Ctrl+P to open command palette
             let is_ctrl_p = (key.modifiers.contains(KeyModifiers::CONTROL)
                 && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P')))
@@ -446,6 +471,16 @@ impl App {
         }
 
         Ok(Vec::new())
+    }
+
+    pub(super) fn should_handle_first_time_splash_shortcuts(
+        show_first_time_splash: bool,
+        input_mode: InputMode,
+        has_active_dialog: bool,
+    ) -> bool {
+        show_first_time_splash
+            && !has_active_dialog
+            && matches!(input_mode, InputMode::Normal | InputMode::Scrolling)
     }
 
     /// Check if a key event should be handled as text input

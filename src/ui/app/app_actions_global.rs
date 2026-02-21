@@ -1,6 +1,6 @@
 use crate::ui::action::Action;
 use crate::ui::app::App;
-use crate::ui::app_state::SelectionDragTarget;
+use crate::ui::app_state::{ModelPickerContext, SelectionDragTarget};
 use crate::ui::effect::Effect;
 use crate::ui::events::{InputMode, ViewMode};
 use std::time::Duration;
@@ -115,6 +115,7 @@ impl App {
                         .model_selector_state
                         .set_allowed_providers(Some(allowed));
                     self.state.model_selector_state.show(model, defaults);
+                    self.state.model_picker_context = ModelPickerContext::SessionSelection;
                     self.state.input_mode = InputMode::SelectingModel;
                 }
             }
@@ -144,7 +145,7 @@ impl App {
             }
             Action::ShowProvidersSelector => {
                 self.state.close_overlays();
-                self.state.pending_onboarding_base_dir_after_providers = false;
+                self.state.pending_new_project_target = None;
                 self.state.provider_selector_state =
                     crate::ui::components::ProviderSelectorState::configure_for(
                         self.config(),

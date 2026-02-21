@@ -38,6 +38,9 @@ Press `Ctrl+N`.
 On first-time onboarding, Conduit first asks which providers you want enabled.
 Installed providers are pre-selected; press `Enter` to continue.
 
+If no default model is configured yet, Conduit then opens **Pick your default model**.
+Choose one model and press `Enter`; this becomes your saved default for new sessions.
+
 Then the project picker shows:
 
 - Recent repositories you've worked with

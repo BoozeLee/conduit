@@ -1,5 +1,6 @@
 use crate::ui::action::Action;
 use crate::ui::app::App;
+use crate::ui::app_state::ModelPickerContext;
 use crate::ui::events::InputMode;
 
 impl App {
@@ -12,6 +13,12 @@ impl App {
                 }
                 InputMode::SelectingModel => {
                     self.state.model_selector_state.hide();
+                    if self.state.model_picker_context
+                        == ModelPickerContext::OnboardingDefaultSelection
+                    {
+                        self.state.pending_new_project_target = None;
+                    }
+                    self.state.model_picker_context = ModelPickerContext::SessionSelection;
                     self.state.input_mode = InputMode::Normal;
                 }
                 InputMode::SelectingReasoning => {
@@ -28,7 +35,7 @@ impl App {
                 }
                 InputMode::SelectingProviders => {
                     self.state.provider_selector_state.hide();
-                    self.state.pending_onboarding_base_dir_after_providers = false;
+                    self.state.pending_new_project_target = None;
                     self.state.input_mode = InputMode::Normal;
                 }
                 InputMode::PickingProject => {

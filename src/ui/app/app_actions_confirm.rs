@@ -1,5 +1,6 @@
 use crate::agent::MessageDisplay;
 use crate::ui::app::App;
+use crate::ui::app_state::ModelPickerContext;
 use crate::ui::components::ConfirmationContext;
 use crate::ui::effect::Effect;
 use crate::ui::events::InputMode;
@@ -9,6 +10,18 @@ impl App {
         &mut self,
         effects: &mut Vec<Effect>,
     ) -> anyhow::Result<()> {
+        // Defensive normalization: if visibility and input mode diverge, confirm the
+        // top-most visible modal instead of the stale input mode.
+        if self.state.model_selector_state.is_visible()
+            && self.state.input_mode != InputMode::SelectingModel
+        {
+            self.state.input_mode = InputMode::SelectingModel;
+        } else if self.state.provider_selector_state.is_visible()
+            && self.state.input_mode != InputMode::SelectingProviders
+        {
+            self.state.input_mode = InputMode::SelectingProviders;
+        }
+
         match self.state.input_mode {
             InputMode::SidebarNavigation => {
                 let selected = self.state.sidebar_state.tree_state.selected;
@@ -34,7 +47,7 @@ impl App {
                 }
             }
             InputMode::SelectingModel => {
-                if let Some(model) = self.state.model_selector_state.selected_model() {
+                if let Some(model) = self.state.model_selector_state.selected_model().cloned() {
                     let model_id = model.id.clone();
                     let agent_type = model.agent_type;
                     let display_name = model.display_name.clone();
@@ -49,6 +62,17 @@ impl App {
                         );
                         return Ok(());
                     }
+                    if self.state.model_picker_context
+                        == ModelPickerContext::OnboardingDefaultSelection
+                    {
+                        if self.persist_default_model_selection(&model) {
+                            self.state.model_selector_state.hide();
+                            self.state.model_picker_context = ModelPickerContext::SessionSelection;
+                            self.continue_new_project_flow();
+                        }
+                        return Ok(());
+                    }
+
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
                         if Self::reject_cross_agent_switch(session, agent_type) {
                             return Ok(());
@@ -65,6 +89,7 @@ impl App {
                     }
                 }
                 self.state.model_selector_state.hide();
+                self.state.model_picker_context = ModelPickerContext::SessionSelection;
                 self.state.input_mode = InputMode::Normal;
             }
             InputMode::SelectingReasoning => {
@@ -129,10 +154,8 @@ impl App {
                     std::time::Duration::from_secs(3),
                 );
 
-                if self.state.pending_onboarding_base_dir_after_providers {
-                    self.state.pending_onboarding_base_dir_after_providers = false;
-                    self.state.base_dir_dialog_state.show();
-                    self.state.input_mode = InputMode::SettingBaseDir;
+                if self.state.pending_new_project_target.is_some() {
+                    self.continue_new_project_flow();
                 } else {
                     self.state.input_mode = InputMode::Normal;
                 }

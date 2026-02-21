@@ -72,6 +72,8 @@ pub struct ModelSelectorState {
     default_model: DefaultModelSelection,
     /// Optional provider allowlist for section filtering
     allowed_providers: Option<Vec<AgentType>>,
+    /// Dialog title
+    title: String,
 }
 
 impl Default for ModelSelectorState {
@@ -104,6 +106,7 @@ impl ModelSelectorState {
             current_model_id: None,
             default_model: DefaultModelSelection::default(),
             allowed_providers: None,
+            title: "Model".to_string(),
         }
     }
 
@@ -154,7 +157,18 @@ impl ModelSelectorState {
 
     /// Show the dialog, optionally setting the current model
     pub fn show(&mut self, current_model_id: Option<String>, default_model: DefaultModelSelection) {
+        self.show_with_title(current_model_id, default_model, "Model".to_string());
+    }
+
+    /// Show the dialog with a custom title.
+    pub fn show_with_title(
+        &mut self,
+        current_model_id: Option<String>,
+        default_model: DefaultModelSelection,
+        title: String,
+    ) {
         self.visible = true;
+        self.title = title;
         self.current_model_id = current_model_id;
         self.default_model = default_model;
         self.search.clear();
@@ -512,13 +526,17 @@ impl ModelSelector {
         };
 
         // Render dialog frame (instructions render on bottom border)
-        let frame = DialogFrame::new("Model", layout.dialog_area.width, layout.dialog_area.height)
-            .instructions(vec![
-                ("Enter", "Select"),
-                ("M-d", "Default"),
-                ("Esc", "Cancel"),
-                ("\u{2191}\u{2193}", "Navigate"),
-            ]);
+        let frame = DialogFrame::new(
+            state.title.as_str(),
+            layout.dialog_area.width,
+            layout.dialog_area.height,
+        )
+        .instructions(vec![
+            ("Enter", "Select"),
+            ("M-d", "Default"),
+            ("Esc", "Cancel"),
+            ("\u{2191}\u{2193}", "Navigate"),
+        ]);
         let inner = frame.render(area, buf);
 
         if inner.height < 4 {

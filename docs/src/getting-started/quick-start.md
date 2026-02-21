@@ -13,7 +13,8 @@ You'll see the main interface with a sidebar on the left and an empty chat area.
 ## Open a Project
 
 1. Press `Ctrl+N` to open the project picker
-   On first run, you will first select enabled providers, then continue.
+   If providers are not configured yet, you'll select them first.
+   If no default model is configured yet, you'll then pick your default model.
 2. Type to filter your recent repositories
 3. Press `Enter` to select one, or `Ctrl+A` to add a new repository
 

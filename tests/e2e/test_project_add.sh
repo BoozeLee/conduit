@@ -7,6 +7,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
+pass_onboarding_gates() {
+    local sock="$1"
+
+    if assert_contains "$sock" "Select Providers" "Shows providers selector"; then
+        press "$sock" "Enter"
+        wait_idle "$sock" 300 3000 > /dev/null
+    fi
+
+    if assert_contains "$sock" "Pick your default model" "Shows default model selector"; then
+        press "$sock" "Enter"
+        wait_idle "$sock" 300 3000 > /dev/null
+    fi
+}
+
 # Test: Ctrl+N opens the "Set Projects Directory" dialog
 test_ctrl_n_opens_dialog() {
     local sock="$1"
@@ -16,11 +30,7 @@ test_ctrl_n_opens_dialog() {
     ctrl "$sock" "n"
     wait_idle "$sock" 300 3000 > /dev/null
 
-    # First-run onboarding now starts with provider selection.
-    if assert_contains "$sock" "Select Providers" "Shows providers selector"; then
-        press "$sock" "Enter"
-        wait_idle "$sock" 300 3000 > /dev/null
-    fi
+    pass_onboarding_gates "$sock"
 
     # Should show the directory dialog
     assert_contains "$sock" "Set Projects Directory" "Ctrl+N opens directory dialog" || return 1
@@ -38,10 +48,7 @@ test_directory_input() {
     ctrl "$sock" "n"
     wait_idle "$sock" 300 3000 > /dev/null
 
-    if assert_contains "$sock" "Select Providers" "Shows providers selector"; then
-        press "$sock" "Enter"
-        wait_idle "$sock" 300 3000 > /dev/null
-    fi
+    pass_onboarding_gates "$sock"
 
     # Check for input field hints
     assert_contains "$sock" "Enter confirm" "Shows Enter hint" || return 1
@@ -59,10 +66,7 @@ test_escape_cancels() {
     ctrl "$sock" "n"
     wait_idle "$sock" 300 3000 > /dev/null
 
-    if assert_contains "$sock" "Select Providers" "Shows providers selector"; then
-        press "$sock" "Enter"
-        wait_idle "$sock" 300 3000 > /dev/null
-    fi
+    pass_onboarding_gates "$sock"
 
     # Verify dialog is open
     assert_contains "$sock" "Set Projects Directory" "Dialog is open" || return 1
@@ -87,10 +91,7 @@ test_type_directory() {
     ctrl "$sock" "n"
     wait_idle "$sock" 300 3000 > /dev/null
 
-    if assert_contains "$sock" "Select Providers" "Shows providers selector"; then
-        press "$sock" "Enter"
-        wait_idle "$sock" 300 3000 > /dev/null
-    fi
+    pass_onboarding_gates "$sock"
 
     # Clear existing text and type new path
     # Use Ctrl+U to clear the line
