@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-22
+
+### Added
+- **OpenCode Agent** - Full integration with OpenCode as a new agent backend, including history restore, tool rendering, reasoning messages, and live event streaming
+- **Checkout Workspaces** - Clone and manage repositories as workspaces directly from the TUI
+- **/fork Command** - Fork sessions into new tabs with full context preservation
+- **Provider-First Architecture** - Provider selection flow with model filtering and onboarding improvements
+- **Reasoning Effort Selector** - Configure reasoning effort per session in the TUI
+- **TUI Visual Polish** - Margins, role labels, placeholder text, file tabs with syntax highlighting, redesigned stop button
+- **Web UI Enhancements** - Progress and unseen indicators on session tabs, auto-drain queued messages, improved error display
+- **Homebrew Tap** - Automated formula updates on release via GitHub Actions
+- **E2E Testing** - CI pipeline with Termwright for end-to-end TUI testing
+- Model catalog refresh for Claude and Codex
+
+### Fixed
+- Adaptive frame rate for lower CPU usage
+- Session persistence and tab identity across workspace switches
+- Modal freeze during long-running preflights
+- Chat scroll pinning during streaming
+- Cross-agent model switching blocked in active sessions
+- OpenCode idle reconnection and error recovery
+- Workspace session tab stability
+- Plan mode alignment across all agents
+- Fork context window resolution
+
 ## [0.2.0] - 2025-01-20
 
 ### Added
@@ -125,7 +150,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Real-time streaming responses
 - Terminal-native UI with Ratatui
 
-[Unreleased]: https://github.com/conduit-cli/conduit/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/conduit-cli/conduit/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/conduit-cli/conduit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/conduit-cli/conduit/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/conduit-cli/conduit/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/conduit-cli/conduit/compare/v0.1.4...v0.1.5
