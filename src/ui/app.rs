@@ -7139,7 +7139,6 @@ AgentType::Ollama => todo!(),
         }
 
         Ok(effects)
-    }
 
     fn handle_submit_action(&mut self, mode: QueuedMessageMode) -> anyhow::Result<Vec<Effect>> {
         let mut effects = Vec::new();
@@ -9576,7 +9575,6 @@ AgentType::Ollama => todo!(),
 
         Ok(full_path)
     }
-}
 
 struct SessionStateSnapshot {
     tabs: Vec<SessionTab>,
@@ -10655,5 +10653,4 @@ mod tests {
         assert!(!app.state.agent_selector_state.is_visible());
         assert!(app.state.tab_manager.active_session().is_some());
         assert!(effects.is_empty());
-    }
 }
