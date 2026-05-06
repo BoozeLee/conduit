@@ -1,5 +1,5 @@
 # Conduit Configuration File
-# Location: ~/.conduit/config.toml
+# Location: ~/.nexus/config.toml
 #
 # This file allows you to customize keybindings, tool paths, and themes.
 # Settings are merged with defaults, so you only need to specify
