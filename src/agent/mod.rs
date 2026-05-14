@@ -7,6 +7,7 @@ pub mod gemini;
 pub mod history;
 pub mod mock;
 pub mod models;
+pub mod ollama;
 pub mod opencode;
 pub mod runner;
 pub mod session;
@@ -25,6 +26,7 @@ pub use history::{
 };
 pub use mock::{MockAgentRunner, MockConfig, MockEventBuilder, MockStartError};
 pub use models::{ModelInfo, ModelRegistry};
+pub use ollama::OllamaRunner;
 pub use opencode::OpencodeRunner;
 pub use runner::{AgentHandle, AgentInput, AgentMode, AgentRunner, AgentStartConfig, AgentType};
 pub use session::{SessionId, SessionMetadata, SessionStatus};
