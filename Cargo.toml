@@ -1,5 +1,5 @@
 [package]
-name = "conduit-cli"
+name = "nexus-cli"
 version = "0.2.0"
 edition = "2021"
 description = "Multi-agent TUI for Claude Code and Codex CLI"

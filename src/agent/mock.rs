@@ -6,9 +6,9 @@
 //!
 //! # Example
 //! ```no_run
-//! use conduit::agent::mock::{MockAgentRunner, MockConfig};
-//! use conduit::agent::{AgentType, AgentEvent, SessionInitEvent, AgentStartConfig};
-//! use conduit::agent::session::SessionId;
+//! use nexus::agent::mock::{MockAgentRunner, MockConfig};
+//! use nexus::agent::{AgentType, AgentEvent, SessionInitEvent, AgentStartConfig};
+//! use nexus::agent::session::SessionId;
 //!
 //! #[tokio::test]
 //! async fn test_agent_flow() {

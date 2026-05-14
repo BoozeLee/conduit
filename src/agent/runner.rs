@@ -13,6 +13,7 @@ pub enum AgentType {
     Claude,
     Codex,
     Gemini,
+    Ollama,
     Opencode,
 }
 
@@ -83,6 +84,7 @@ impl AgentType {
             AgentType::Codex => "codex",
             AgentType::Gemini => "gemini",
             AgentType::Opencode => "opencode",
+            AgentType::Ollama => "ollama",
         }
     }
 
@@ -101,6 +103,7 @@ impl AgentType {
             AgentType::Codex => "Codex CLI",
             AgentType::Gemini => "Gemini CLI",
             AgentType::Opencode => "OpenCode",
+            AgentType::Ollama => "Ollama",
         }
     }
 }
