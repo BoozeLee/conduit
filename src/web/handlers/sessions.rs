@@ -220,6 +220,7 @@ fn load_history_for_session(session: &SessionTab) -> Vec<ChatMessage> {
     };
 
     let mut messages = match session.agent_type {
+AgentType::Ollama => todo!(),
         AgentType::Claude => load_claude_history_with_debug(agent_session_id)
             .map(|(messages, _, _)| messages)
             .unwrap_or_else(|e| {
@@ -393,10 +394,6 @@ pub async fn get_session_events(
                 vec![]
             }
         },
-        AgentType::Gemini => {
-            // Gemini history loading not supported yet
-            vec![]
-        }
         AgentType::Opencode => match load_opencode_history_with_debug(&agent_session_id) {
             Ok((msgs, entries, file_path)) => {
                 debug_entries = entries;
@@ -408,6 +405,7 @@ pub async fn get_session_events(
                 vec![]
             }
         },
+        AgentType::Gemini | AgentType::Ollama => Vec::new(),
     };
 
     let messages: Vec<ChatMessage> = messages

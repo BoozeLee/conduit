@@ -17,6 +17,9 @@ pub enum AgentError {
     #[error("Agent binary not found: {0}")]
     BinaryNotFound(String),
 
+    #[error("Runner error")]
+    RunnerError,
+
     #[error("Session not found: {0}")]
     SessionNotFound(String),
 

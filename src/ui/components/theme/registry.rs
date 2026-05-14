@@ -73,7 +73,7 @@ impl ThemeRegistry {
         registry
     }
 
-    /// Discover TOML themes from ~/.conduit/themes/.
+    /// Discover TOML themes from ~/.nexus/themes/.
     pub fn discover_toml_themes(&mut self) {
         let themes_dir = util::data_dir().join("themes");
         if !themes_dir.exists() {

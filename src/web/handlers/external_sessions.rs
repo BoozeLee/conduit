@@ -137,7 +137,7 @@ pub async fn import_external_session(
 }
 
 fn ensure_workspace_for_external_session(
-    core: &crate::core::ConduitCore,
+    core: &crate::core::NexusCore,
     session: &ExternalSession,
 ) -> Result<(Option<Workspace>, Option<Repository>), WebError> {
     let project = match session.project.as_ref() {

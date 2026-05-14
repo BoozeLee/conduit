@@ -3,19 +3,19 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::core::ConduitCore;
+use crate::core::NexusCore;
 
 use super::ws::SessionManager;
 use super::{StatusManager, StatusManagerConfig};
 
 /// Shared state for the web application.
 ///
-/// This wraps `ConduitCore` with thread-safe access patterns suitable
+/// This wraps `NexusCore` with thread-safe access patterns suitable
 /// for use with Axum's async handlers.
 #[derive(Clone)]
 pub struct WebAppState {
     /// The shared Conduit core containing all business logic.
-    inner: Arc<RwLock<ConduitCore>>,
+    inner: Arc<RwLock<NexusCore>>,
     /// Session manager for WebSocket agent sessions.
     session_manager: Arc<SessionManager>,
     /// Background workspace status manager.
@@ -23,8 +23,8 @@ pub struct WebAppState {
 }
 
 impl WebAppState {
-    /// Create a new web application state from a ConduitCore.
-    pub fn new(core: ConduitCore) -> Self {
+    /// Create a new web application state from a NexusCore.
+    pub fn new(core: NexusCore) -> Self {
         let status_config = StatusManagerConfig::from_config(core.config());
         let inner = Arc::new(RwLock::new(core));
         let session_manager = Arc::new(SessionManager::new(inner.clone()));
@@ -37,12 +37,12 @@ impl WebAppState {
     }
 
     /// Get read access to the core.
-    pub async fn core(&self) -> tokio::sync::RwLockReadGuard<'_, ConduitCore> {
+    pub async fn core(&self) -> tokio::sync::RwLockReadGuard<'_, NexusCore> {
         self.inner.read().await
     }
 
     /// Get write access to the core.
-    pub async fn core_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, ConduitCore> {
+    pub async fn core_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, NexusCore> {
         self.inner.write().await
     }
 
