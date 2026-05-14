@@ -6,10 +6,10 @@
 //! - Configuration and tool availability
 //! - Worktree management
 
-mod conduit_core;
+mod nexus_core;
 pub mod dto;
 mod repo_settings;
 pub mod services;
 
-pub use conduit_core::ConduitCore;
+pub use nexus_core::NexusCore;
 pub use repo_settings::{resolve_repo_workspace_settings, RepoWorkspaceSettings};

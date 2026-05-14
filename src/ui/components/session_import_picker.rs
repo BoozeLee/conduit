@@ -555,12 +555,14 @@ impl SessionImportPicker {
             // Row 1: Display text (with selection indicator)
             let prefix = if is_selected { "> " } else { "  " };
             let agent_icon = match session.agent_type {
+AgentType::Ollama => todo!(),
                 AgentType::Claude => "C",
                 AgentType::Codex => "X",
                 AgentType::Gemini => "G",
                 AgentType::Opencode => "O",
             };
             let agent_color = match session.agent_type {
+AgentType::Ollama => todo!(),
                 AgentType::Claude => agent_claude(),
                 AgentType::Codex => agent_codex(),
                 AgentType::Gemini => agent_gemini(),

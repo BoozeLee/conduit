@@ -773,7 +773,7 @@ impl AgentRunner for CodexCliRunner {
             request_id: peer.next_request_id(),
             params: InitializeParams {
                 client_info: ClientInfo {
-                    name: "conduit".to_string(),
+                    name: "nexus".to_string(),
                     title: Some("Conduit".to_string()),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -1037,7 +1037,7 @@ mod tests {
     #[test]
     fn test_build_input_items_with_text_and_images() {
         let tmp = tempfile::Builder::new()
-            .prefix("conduit-codex-image-")
+            .prefix("nexus-codex-image-")
             .suffix(".png")
             .tempfile()
             .expect("failed to create temp image");

@@ -15,7 +15,7 @@ pub use agent::{
     SessionMetadata, SessionStatus,
 };
 pub use config::Config;
-pub use core::ConduitCore;
+pub use core::NexusCore;
 pub use data::{Database, Repository, RepositoryStore, Workspace, WorkspaceStore};
 pub use git::{
     CheckState, CheckStatus, MergeReadiness, MergeableStatus, PrManager, PrPreflightResult,

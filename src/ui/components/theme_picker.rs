@@ -195,11 +195,11 @@ impl ThemePickerState {
 
         // Group themes by source
         let mut builtin: Vec<&ThemeInfo> = Vec::new();
-        let mut conduit_toml: Vec<&ThemeInfo> = Vec::new();
+        let mut nexus_toml: Vec<&ThemeInfo> = Vec::new();
         let mut vscode: Vec<&ThemeInfo> = Vec::new();
         let mut custom: Vec<&ThemeInfo> = Vec::new();
         let mut seen_builtin: HashSet<String> = HashSet::new();
-        let mut seen_conduit_toml: HashSet<String> = HashSet::new();
+        let mut seen_nexus_toml: HashSet<String> = HashSet::new();
         let mut seen_vscode: HashSet<String> = HashSet::new();
         let mut seen_custom: HashSet<String> = HashSet::new();
 
@@ -214,8 +214,8 @@ impl ThemePickerState {
                         path.display(),
                         theme.name.trim().to_lowercase()
                     );
-                    if seen_conduit_toml.insert(key.clone()) {
-                        conduit_toml.push(theme);
+                    if seen_nexus_toml.insert(key.clone()) {
+                        nexus_toml.push(theme);
                     } else {
                         tracing::debug!(
                             key = %key,
@@ -242,9 +242,9 @@ impl ThemePickerState {
         }
 
         // Add Conduit TOML section
-        if !conduit_toml.is_empty() {
+        if !nexus_toml.is_empty() {
             items.push(ThemePickerItem::SectionHeader("User Themes".to_string()));
-            for theme in conduit_toml {
+            for theme in nexus_toml {
                 items.push(ThemePickerItem::Theme(theme.clone()));
             }
         }
