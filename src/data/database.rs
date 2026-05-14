@@ -131,7 +131,7 @@ impl Database {
         Ok(db)
     }
 
-    /// Open database in the default location (~/.conduit/conduit.db)
+    /// Open database in the default location (~/.nexus/nexus.db)
     pub fn open_default() -> Result<Self, DatabaseError> {
         Self::open(crate::util::database_path())
     }

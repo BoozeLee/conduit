@@ -1,12 +1,12 @@
 use crate::agent::{AgentType, ModelRegistry};
 use crate::core::dto::{ListModelsDto, ModelGroupDto, ModelInfoDto};
 use crate::core::services::config_service::ConfigService;
-use crate::core::ConduitCore;
+use crate::core::NexusCore;
 
 pub struct ModelService;
 
 impl ModelService {
-    pub fn list_models(core: &ConduitCore) -> ListModelsDto {
+    pub fn list_models(core: &NexusCore) -> ListModelsDto {
         let agent_types = [
             AgentType::Claude,
             AgentType::Codex,

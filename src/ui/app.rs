@@ -33,11 +33,11 @@ use crate::agent::{
     load_opencode_history_for_dir_with_debug, load_opencode_history_with_debug, AgentEvent,
     AgentInput, AgentMode, AgentRunner, AgentStartConfig, AgentType, ClaudeCodeRunner,
     CodexCliRunner, GeminiCliRunner, HistoryDebugEntry, MessageDisplay, ModelRegistry,
-    OpencodeRunner, SessionId,
+    OllamaRunner, OpencodeRunner, SessionId,
 };
 use crate::config::{parse_action, parse_key_notation, Config, KeyContext, COMMAND_NAMES};
 use crate::core::resolve_repo_workspace_settings;
-use crate::core::ConduitCore;
+use crate::core::NexusCore;
 use crate::data::{
     AppStateStore, ForkSeed, ForkSeedStore, QueuedImageAttachment, QueuedMessage,
     QueuedMessageMode, Repository, RepositoryStore, SessionTab, SessionTabStore, WorkspaceStore,
@@ -158,7 +158,7 @@ const PLAN_MODE_INLINE_REMINDER_ENV: &str = "CONDUIT_PLAN_MODE_INLINE_REMINDER";
 /// Main application state
 pub struct App {
     /// Core infrastructure (database, runners, config)
-    core: ConduitCore,
+    core: NexusCore,
     /// In-memory UI state
     state: AppState,
     /// Event channel sender
@@ -266,6 +266,12 @@ impl App {
         self.core.opencode_runner()
     }
 
+    /// Get the Ollama runner.
+    #[inline]
+    fn ollama_runner(&self) -> &Arc<OllamaRunner> {
+        self.core.ollama_runner()
+    }
+
     /// Get the worktree manager.
     #[inline]
     fn worktree_manager(&self) -> &WorkspaceRepoManager {
@@ -329,7 +335,7 @@ impl App {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         // Create core infrastructure (database, runners, worktree manager)
-        let core = ConduitCore::new(config.clone(), tools);
+        let core = NexusCore::new(config.clone(), tools);
 
         // Initialize git tracker
         let (git_update_tx, mut git_update_rx) = mpsc::unbounded_channel();
@@ -459,9 +465,9 @@ impl App {
                         if let Some(repo_dao) = self.repo_dao() {
                             if let Ok(Some(repo)) = repo_dao.get_by_id(workspace.repository_id) {
                                 session.project_name = Some(repo.name);
-                            }
-                        }
-                    }
+                }
+                }
+                }
                 }
             }
 
@@ -473,6 +479,7 @@ impl App {
 
                 // Load chat history from agent files
                 match tab.agent_type {
+AgentType::Ollama => todo!(),
                     AgentType::Claude => {
                         if let Ok((msgs, debug_entries, file_path)) =
                             load_claude_history_with_debug(session_id_str)
@@ -485,9 +492,9 @@ impl App {
                             );
                             for msg in msgs {
                                 session.chat_view.push(msg);
-                            }
-                        }
-                    }
+                }
+                }
+                }
                     AgentType::Codex => {
                         if let Ok((msgs, debug_entries, file_path)) =
                             load_codex_history_with_debug(session_id_str)
@@ -500,17 +507,17 @@ impl App {
                             );
                             for msg in msgs {
                                 session.chat_view.push(msg);
-                            }
-                        }
-                    }
+                }
+                }
+                }
                     AgentType::Gemini => {
                         session.chat_view.push(
                             MessageDisplay::System {
                                 content: "Gemini CLI history import isn't supported yet, so previous messages won't be shown.".to_string(),
-                            }
+                }
                             .to_chat_message(),
                         );
-                    }
+                }
                     AgentType::Opencode => {
                         if let Ok((msgs, debug_entries, file_path)) =
                             load_opencode_history_with_debug(session_id_str)
@@ -522,9 +529,9 @@ impl App {
                             );
                             for msg in msgs {
                                 session.chat_view.push(msg);
-                            }
-                        }
-                    }
+                }
+                }
+                }
                 }
             } else if tab.agent_type == AgentType::Opencode {
                 if let Some(working_dir) = session.working_dir.as_ref() {
@@ -542,8 +549,8 @@ impl App {
                         );
                         for msg in msgs {
                             session.chat_view.push(msg);
-                        }
-                    }
+                }
+                }
                 }
             }
 
@@ -562,7 +569,7 @@ impl App {
                 if !already_in_history {
                     let display = MessageDisplay::User {
                         content: pending.clone(),
-                    };
+                };
                     session.chat_view.push(display.to_chat_message());
                     session.pending_user_message = Some(pending.clone());
                 }
@@ -627,7 +634,7 @@ impl App {
                 for id_str in collapsed_str.split(',') {
                     if let Ok(id) = uuid::Uuid::parse_str(id_str) {
                         self.state.sidebar_data.collapse_repo(id);
-                    }
+                }
                 }
             }
         }
@@ -671,7 +678,7 @@ impl App {
                             .map(|ws| (ws.id, ws.name, ws.branch))
                             .collect();
                         data.push((repo.id, repo.name, workspace_info));
-                    }
+                }
                 }
             }
             data
@@ -1068,7 +1075,7 @@ impl App {
                             self.flush_scroll_deltas(&mut pending_scroll_up, &mut pending_scroll_down);
                             self.dispatch_event(AppEvent::Input(Event::Key(key)), terminal, guard)
                                 .await?;
-                        }
+                }
                         Ok(Event::Mouse(mouse)) => {
                             match mouse.kind {
                                 MouseEventKind::ScrollUp => {
@@ -1078,15 +1085,15 @@ impl App {
                                         true,
                                     ) {
                                         // Handled by tab bar, skip
-                                    } else {
+                } else {
                                         if self.should_route_scroll_to_chat() {
                                             self.record_scroll(1);
-                                        }
+                }
                                         pending_scroll_up = pending_scroll_up.saturating_add(1);
                                         // Don't set need_redraw here - batch scroll events
                                         // and redraw on clean tick for smoother scrolling
-                                    }
-                                }
+                }
+                }
                                 MouseEventKind::ScrollDown => {
                                     if self.handle_tab_bar_wheel(
                                         mouse.column,
@@ -1094,15 +1101,15 @@ impl App {
                                         false,
                                     ) {
                                         // Handled by tab bar, skip
-                                    } else {
+                } else {
                                         if self.should_route_scroll_to_chat() {
                                             self.record_scroll(1);
-                                        }
+                }
                                         pending_scroll_down = pending_scroll_down.saturating_add(1);
                                         // Don't set need_redraw here - batch scroll events
                                         // and redraw on clean tick for smoother scrolling
-                                    }
-                                }
+                }
+                }
                                 _ => {
                                     self.state.need_redraw = true;
                                     self.flush_scroll_deltas(
@@ -1115,9 +1122,9 @@ impl App {
                                         guard,
                                     )
                                     .await?;
-                                }
-                            }
-                        }
+                }
+                }
+                }
                         Ok(event) => {
                             // Other input events (resize, focus, paste, etc.)
                             self.state.need_redraw = true;
@@ -1127,11 +1134,11 @@ impl App {
                             );
                             self.dispatch_event(AppEvent::Input(event), terminal, guard)
                                 .await?;
-                        }
+                }
                         Err(e) => {
                             tracing::warn!(error = %e, "Error reading terminal event");
-                        }
-                    }
+                }
+                }
                     self.state.metrics.event_time = event_start.elapsed();
                 }
 
@@ -1318,7 +1325,7 @@ impl App {
                     Self::flush_pending_agent_output(session);
                     let display = MessageDisplay::System {
                         content: "Interrupted".to_string(),
-                    };
+                };
                     session.chat_view.push(display.to_chat_message());
                 }
             }
@@ -1346,7 +1353,7 @@ impl App {
                         pid,
                         context,
                         success,
-                    },
+                },
                     "agent_termination_result",
                 );
             } else if !success {
@@ -1439,7 +1446,7 @@ impl App {
                 if code == libc::EPERM {
                     if Instant::now() >= deadline {
                         return false;
-                    }
+                }
                     std::thread::sleep(AGENT_TERMINATION_POLL_INTERVAL);
                     continue;
                 }
@@ -1841,12 +1848,12 @@ impl App {
                                     ))
                                     .await?,
                                 );
-                            }
+                }
                             SlashCommand::NewSession => {
                                 self.start_new_session_in_place();
-                            }
-                        }
-                    }
+                }
+                }
+                }
                 } else if self.state.input_mode == InputMode::CommandPalette {
                     if let Some(entry) = self.state.command_palette_state.selected_entry() {
                         let action = entry.action.clone();
@@ -1857,8 +1864,8 @@ impl App {
                             effects.extend(
                                 Box::pin(self.execute_action(action, terminal, guard)).await?,
                             );
-                        }
-                    }
+                }
+                }
                 } else {
                     self.handle_confirm_action(&mut effects)?;
                 }
@@ -1881,13 +1888,13 @@ impl App {
                                 format!("Failed to save default model: {err}"),
                                 Duration::from_secs(5),
                             );
-                        } else {
+                } else {
                             self.state.set_timed_footer_message(
                                 format!("Default model set to: {}", model.display_name),
                                 Duration::from_secs(5),
                             );
-                        }
-                    }
+                }
+                }
                 }
             }
             Action::Cancel
@@ -1938,8 +1945,8 @@ impl App {
                             effects.extend(
                                 Box::pin(self.execute_action(action, terminal, guard)).await?,
                             );
-                        }
-                    }
+                }
+                }
                 }
             }
             Action::CompleteCommand => {
@@ -1967,11 +1974,11 @@ impl App {
                     let app_state_dao = self.app_state_dao_clone();
                     if let Err(e) = tokio::task::spawn_blocking(move || {
                         Self::persist_session_state(snapshot, session_tab_dao, app_state_dao);
-                    })
+                })
                     .await
                     {
                         eprintln!("Warning: Failed to save session state: {}", e);
-                    }
+                }
                 }
                 Effect::StartAgent {
                     session_id,
@@ -1983,7 +1990,8 @@ impl App {
                         AgentType::Codex => self.codex_runner().clone(),
                         AgentType::Gemini => self.gemini_runner().clone(),
                         AgentType::Opencode => self.opencode_runner().clone(),
-                    };
+                        AgentType::Ollama => self.ollama_runner().clone(),
+                };
 
                     let event_tx = self.event_tx.clone();
 
@@ -1999,7 +2007,7 @@ impl App {
                                         session_id,
                                         pid,
                                         input_tx,
-                                    },
+                },
                                     "agent_started",
                                 );
 
@@ -2022,22 +2030,22 @@ impl App {
                                         match stop_result {
                                             Ok(Ok(())) => {
                                                 stop_ok = true;
-                                            }
+                }
                                             Ok(Err(stop_err)) => {
                                                 tracing::debug!(
                                                     session_id = %session_id,
                                                     error = %stop_err,
                                                     "Failed to stop agent after event channel closed"
                                                 );
-                                            }
+                }
                                             Err(_) => {
                                                 tracing::debug!(
                                                     session_id = %session_id,
                                                     timeout_secs = AGENT_SHUTDOWN_TIMEOUT.as_secs(),
                                                     "Timed out stopping agent after event channel closed"
                                                 );
-                                            }
-                                        }
+                }
+                }
 
                                         if !stop_ok {
                                             let kill_result = tokio::time::timeout(
@@ -2053,32 +2061,32 @@ impl App {
                                                         error = %kill_err,
                                                         "Failed to kill agent after event channel closed"
                                                     );
-                                                }
+                }
                                                 Err(_) => {
                                                     tracing::debug!(
                                                         session_id = %session_id,
                                                         timeout_secs = AGENT_SHUTDOWN_TIMEOUT.as_secs(),
                                                         "Timed out killing agent after event channel closed"
                                                     );
-                                                }
-                                            }
-                                        }
+                }
+                }
+                }
                                         break;
-                                    }
-                                }
+                }
+                }
                                 send_app_event(
                                     &event_tx,
                                     AppEvent::AgentStreamEnded { session_id },
                                     "agent_stream_ended",
                                 );
-                            }
+                }
                             Err(e) => {
                                 send_app_event(
                                     &event_tx,
                                     AppEvent::AgentStartFailed {
                                         session_id,
                                         error: format!("Agent error: {}", e),
-                                    },
+                },
                                     "agent_start_error",
                                 );
                                 send_app_event(
@@ -2086,9 +2094,9 @@ impl App {
                                     AppEvent::AgentStreamEnded { session_id },
                                     "agent_stream_ended",
                                 );
-                            }
-                        }
-                    });
+                }
+                }
+                });
                 }
                 Effect::PrPreflight {
                     tab_index,
@@ -2103,10 +2111,10 @@ impl App {
                                 tab_index,
                                 working_dir,
                                 result,
-                            },
+                },
                             "pr_preflight_completed",
                         );
-                    });
+                });
                 }
                 Effect::OpenPrInBrowser { working_dir } => {
                     let event_tx = self.event_tx.clone();
@@ -2118,7 +2126,7 @@ impl App {
                             AppEvent::OpenPrCompleted { result },
                             "open_pr_completed",
                         );
-                    });
+                });
                 }
                 Effect::DumpDebugState => {
                     let result = self.dump_debug_state();
@@ -2145,13 +2153,13 @@ impl App {
                                 None => {
                                     return Err("No working directory available for shell command"
                                         .to_string())
-                                }
-                            };
+                }
+                };
                             let (shell, flag) = if cfg!(windows) {
                                 ("cmd", "/C")
-                            } else {
+                } else {
                                 ("sh", "-c")
-                            };
+                };
                             let mut cmd = tokio::process::Command::new(shell);
                             cmd.arg(flag).arg(&command);
                             cmd.kill_on_drop(true);
@@ -2165,17 +2173,17 @@ impl App {
                                 .map_err(|e| format!("Failed to run shell command: {e}"))?;
                             let stdout = child.stdout.take().ok_or_else(|| {
                                 "Failed to run shell command: stdout unavailable".to_string()
-                            })?;
+                })?;
                             let stderr = child.stderr.take().ok_or_else(|| {
                                 "Failed to run shell command: stderr unavailable".to_string()
-                            })?;
+                })?;
 
                             let stdout_task = tokio::spawn(async move {
                                 App::read_bounded_output(stdout, SHELL_COMMAND_OUTPUT_LIMIT).await
-                            });
+                });
                             let stderr_task = tokio::spawn(async move {
                                 App::read_bounded_output(stderr, SHELL_COMMAND_OUTPUT_LIMIT).await
-                            });
+                });
 
                             let status =
                                 match tokio::time::timeout(SHELL_COMMAND_TIMEOUT, child.wait())
@@ -2189,7 +2197,7 @@ impl App {
                                                 error = %err,
                                                 "Failed to kill timed out shell command"
                                             );
-                                        }
+                }
                                         match tokio::time::timeout(
                                             SHELL_COMMAND_REAP_TIMEOUT,
                                             child.wait(),
@@ -2202,15 +2210,15 @@ impl App {
                                                     error = %err,
                                                     "Failed to reap timed out shell command"
                                                 );
-                                            }
+                }
                                             Err(_) => {
                                                 tracing::debug!(
                                                     timeout_secs =
                                                         SHELL_COMMAND_REAP_TIMEOUT.as_secs(),
                                                     "Timed out waiting to reap shell command"
                                                 );
-                                            }
-                                        }
+                }
+                }
                                         stdout_task.abort();
                                         stderr_task.abort();
                                         if let Err(err) = stdout_task.await {
@@ -2218,19 +2226,19 @@ impl App {
                                                 error = %err,
                                                 "Failed to abort stdout reader task"
                                             );
-                                        }
+                }
                                         if let Err(err) = stderr_task.await {
                                             tracing::debug!(
                                                 error = %err,
                                                 "Failed to abort stderr reader task"
                                             );
-                                        }
+                }
                                         return Err(format!(
                                             "Shell command timed out after {}s",
                                             SHELL_COMMAND_TIMEOUT.as_secs()
                                         ));
-                                    }
-                                };
+                }
+                };
 
                             let (stdout_bytes, stdout_truncated, stdout_timed_out) =
                                 App::join_reader_with_timeout(stdout_task, "stdout").await?;
@@ -2242,34 +2250,34 @@ impl App {
                                             error = %err,
                                             "Failed to abort stderr reader task"
                                         );
-                                    }
+                }
                                     (Vec::new(), true, true)
-                                } else {
+                } else {
                                     App::join_reader_with_timeout(stderr_task, "stderr").await?
-                                };
+                };
                             let stdout = String::from_utf8_lossy(&stdout_bytes);
                             let stderr = String::from_utf8_lossy(&stderr_bytes);
                             let mut combined = String::new();
                             if !stdout.is_empty() {
                                 combined.push_str(&stdout);
-                            }
+                }
                             if !stderr.is_empty() {
                                 if !combined.is_empty() && !combined.ends_with('\n') {
                                     combined.push('\n');
-                                }
+                }
                                 combined.push_str(&stderr);
-                            }
+                }
                             if stdout_truncated || stderr_truncated {
                                 if !combined.is_empty() && !combined.ends_with('\n') {
                                     combined.push('\n');
-                                }
+                }
                                 combined.push_str("[output truncated]\n");
-                            }
+                }
                             Ok(crate::ui::events::ShellCommandResult {
                                 output: combined,
                                 exit_code: status.code(),
-                            })
-                        }
+                })
+                }
                         .await;
 
                         send_app_event(
@@ -2278,10 +2286,10 @@ impl App {
                                 session_id,
                                 message_index,
                                 result,
-                            },
+                },
                             "shell_command_completed",
                         );
-                    });
+                });
                 }
                 Effect::CreateWorkspace { repo_id } => {
                     let repo_dao = self.repo_dao_clone();
@@ -2349,7 +2357,7 @@ impl App {
                                         workspace_path = %workspace.path.display(),
                                         "Failed to clean up workspace after DB error"
                                     );
-                                }
+                }
                                 if let Err(branch_err) = worktree_manager.delete_branch(
                                     settings.mode,
                                     &base_path,
@@ -2363,22 +2371,22 @@ impl App {
                                         branch = %branch_name,
                                         "Failed to delete branch after DB error"
                                     );
-                                }
+                }
                                 return Err(format!("Failed to save workspace to database: {}", e));
-                            }
+                }
 
                             Ok(WorkspaceCreated {
                                 repo_id,
                                 workspace_id,
-                            })
-                        })();
+                })
+                })();
 
                         send_app_event(
                             &event_tx,
                             AppEvent::WorkspaceCreated { repo_id, result },
                             "workspace_created",
                         );
-                    });
+                });
                 }
                 Effect::ForkWorkspace {
                     parent_workspace_id,
@@ -2458,7 +2466,7 @@ impl App {
                                         workspace_path = %workspace.path.display(),
                                         "Failed to clean up workspace after DB error"
                                     );
-                                }
+                }
                                 if let Err(branch_err) = worktree_manager.delete_branch(
                                     settings.mode,
                                     &base_path,
@@ -2472,15 +2480,15 @@ impl App {
                                         branch = %branch_name,
                                         "Failed to delete branch after DB error"
                                     );
-                                }
+                }
                                 return Err(format!("Failed to save workspace to database: {}", e));
-                            }
+                }
 
                             Ok(ForkWorkspaceCreated {
                                 repo_id: parent_workspace.repository_id,
                                 workspace_id,
-                            })
-                        })(
+                })
+                })(
                         );
 
                         send_app_event(
@@ -2488,10 +2496,10 @@ impl App {
                             AppEvent::ForkWorkspaceCreated {
                                 parent_workspace_id,
                                 result,
-                            },
+                },
                             "fork_workspace_created",
                         );
-                    });
+                });
                 }
                 Effect::ArchiveWorkspace {
                     workspace_id,
@@ -2522,16 +2530,16 @@ impl App {
                                             "Failed to load repository for archive"
                                         );
                                         None
-                                    }
-                                },
+                }
+                },
                                 None => {
                                     tracing::warn!(
                                         workspace_id = %workspace_id,
                                         "Repository DAO unavailable for archive"
                                     );
                                     None
-                                }
-                            };
+                }
+                };
                             let repo_base_path =
                                 repo.as_ref().and_then(|repo| repo.base_path.clone());
                             let settings = repo
@@ -2549,11 +2557,11 @@ impl App {
                                 ) {
                                     Ok(commit_sha) => {
                                         archived_commit_sha = Some(commit_sha);
-                                    }
+                }
                                     Err(e) => {
                                         warnings.push(format!("Failed to read branch SHA: {}", e));
-                                    }
-                                }
+                }
+                }
 
                                 if let Err(e) = worktree_manager.remove_workspace(
                                     settings.mode,
@@ -2561,7 +2569,7 @@ impl App {
                                     &workspace.path,
                                 ) {
                                     warnings.push(format!("Failed to remove worktree: {}", e));
-                                }
+                }
 
                                 if settings.archive_delete_branch {
                                     if let Err(e) = worktree_manager.delete_branch(
@@ -2574,8 +2582,8 @@ impl App {
                                             "Failed to delete branch '{}': {}",
                                             workspace.branch, e
                                         ));
-                                    }
-                                }
+                }
+                }
 
                                 if delete_remote && settings.archive_delete_branch {
                                     if let Err(e) = worktree_manager
@@ -2585,21 +2593,21 @@ impl App {
                                             "Failed to delete remote branch '{}': {}",
                                             workspace.branch, e
                                         ));
-                                    }
-                                }
-                            }
+                }
+                }
+                }
 
                             workspace_dao
                                 .archive(workspace_id, archived_commit_sha)
                                 .map_err(|e| {
                                     format!("Failed to archive workspace in database: {}", e)
-                                })?;
+                })?;
 
                             Ok(WorkspaceArchived {
                                 workspace_id,
                                 warnings,
-                            })
-                        })(
+                })
+                })(
                         );
 
                         send_app_event(
@@ -2607,10 +2615,10 @@ impl App {
                             AppEvent::WorkspaceArchived {
                                 workspace_id,
                                 result,
-                            },
+                },
                             "workspace_archived",
                         );
-                    });
+                });
                 }
                 Effect::RemoveProject { repo_id } => {
                     let repo_dao = self.repo_dao_clone();
@@ -2632,12 +2640,12 @@ impl App {
                                         repo_id,
                                         workspace_ids,
                                         errors,
-                                    },
-                                },
+                },
+                },
                                 "project_removed",
                             );
                             return;
-                        };
+                };
                         let Some(workspace_dao) = workspace_dao else {
                             errors.push("No workspace DAO available".to_string());
                             send_app_event(
@@ -2647,19 +2655,19 @@ impl App {
                                         repo_id,
                                         workspace_ids,
                                         errors,
-                                    },
-                                },
+                },
+                },
                                 "project_removed",
                             );
                             return;
-                        };
+                };
 
                         let (repo_base_path, repo_name, repo_settings) =
                             match repo_dao.get_by_id(repo_id) {
                                 Ok(Some(repo)) => {
                                     let settings = resolve_repo_workspace_settings(&config, &repo);
                                     (repo.base_path, repo.name, Some(settings))
-                                }
+                }
                                 Ok(None) => {
                                     errors.push("Repository not found".to_string());
                                     send_app_event(
@@ -2669,12 +2677,12 @@ impl App {
                                                 repo_id,
                                                 workspace_ids,
                                                 errors,
-                                            },
-                                        },
+                },
+                },
                                         "project_removed",
                                     );
                                     return;
-                                }
+                }
                                 Err(e) => {
                                     errors.push(format!("Failed to load repository: {}", e));
                                     send_app_event(
@@ -2684,13 +2692,13 @@ impl App {
                                                 repo_id,
                                                 workspace_ids,
                                                 errors,
-                                            },
-                                        },
+                },
+                },
                                         "project_removed",
                                     );
                                     return;
-                                }
-                            };
+                }
+                };
 
                         let workspaces =
                             workspace_dao.get_by_repository(repo_id).unwrap_or_default();
@@ -2708,14 +2716,14 @@ impl App {
                                 ) {
                                     Ok(sha) => {
                                         archived_commit_sha = Some(sha);
-                                    }
+                }
                                     Err(e) => {
                                         errors.push(format!(
                                             "Failed to read branch SHA for workspace '{}': {}",
                                             ws.name, e
                                         ));
-                                    }
-                                }
+                }
+                }
 
                                 if let Err(e) = worktree_manager.remove_workspace(
                                     settings.mode,
@@ -2726,7 +2734,7 @@ impl App {
                                         "Failed to remove worktree '{}': {}",
                                         ws.name, e
                                     ));
-                                }
+                }
 
                                 if let Err(e) = worktree_manager.delete_branch(
                                     settings.mode,
@@ -2738,15 +2746,15 @@ impl App {
                                         "Failed to delete branch '{}' for workspace '{}': {}",
                                         ws.branch, ws.name, e
                                     ));
-                                }
-                            }
+                }
+                }
                             if let Err(e) = workspace_dao.archive(ws.id, archived_commit_sha) {
                                 errors.push(format!(
                                     "Failed to archive workspace '{}': {}",
                                     ws.name, e
                                 ));
-                            }
-                        }
+                }
+                }
 
                         let workspaces_dir = crate::util::workspaces_dir();
                         let repo_name_path = std::path::Path::new(&repo_name);
@@ -2759,7 +2767,7 @@ impl App {
                                 "Skipping project folder removal due to unsafe repo name: {}",
                                 repo_name
                             ));
-                        } else {
+                } else {
                             let project_workspaces_path = workspaces_dir.join(&repo_name);
                             match (
                                 std::fs::canonicalize(&workspaces_dir),
@@ -2773,35 +2781,35 @@ impl App {
                                                 "Failed to remove project folder: {}",
                                                 e
                                             ));
-                                        }
-                                    } else {
+                }
+                } else {
                                         errors.push(format!(
                                             "Skipping project folder removal outside managed root: {}",
                                             canonical_project.display()
                                         ));
-                                    }
-                                }
+                }
+                }
                                 (Err(e), _) => {
                                     errors.push(format!(
                                         "Failed to canonicalize workspaces dir: {}",
                                         e
                                     ));
-                                }
+                }
                                 (_, Err(e)) => {
                                     if e.kind() != io::ErrorKind::NotFound {
                                         errors.push(format!(
                                             "Failed to canonicalize project folder: {}",
                                             e
                                         ));
-                                    }
-                                }
-                            }
-                        }
+                }
+                }
+                }
+                }
 
                         if let Err(e) = repo_dao.delete(repo_id) {
                             errors
                                 .push(format!("Failed to delete repository from database: {}", e));
-                        }
+                }
 
                         send_app_event(
                             &event_tx,
@@ -2810,11 +2818,11 @@ impl App {
                                     repo_id,
                                     workspace_ids,
                                     errors,
-                                },
-                            },
+                },
+                },
                             "project_removed",
                         );
-                    });
+                });
                 }
                 Effect::CopyToClipboard(text) => {
                     use arboard::Clipboard;
@@ -2822,12 +2830,12 @@ impl App {
                         Ok(mut clipboard) => {
                             if let Err(e) = clipboard.set_text(text) {
                                 tracing::debug!(error = %e, "Failed to copy text to clipboard");
-                            }
-                        }
+                }
+                }
                         Err(e) => {
                             tracing::debug!(error = %e, "Failed to initialize clipboard");
-                        }
-                    }
+                }
+                }
                 }
                 Effect::DiscoverSessions => {
                     use crate::session::{discover_sessions_incremental, SessionDiscoveryUpdate};
@@ -2837,20 +2845,20 @@ impl App {
                             let event = match update {
                                 SessionDiscoveryUpdate::CachedLoaded(sessions) => {
                                     AppEvent::SessionsCacheLoaded { sessions }
-                                }
+                }
                                 SessionDiscoveryUpdate::SessionUpdated(session) => {
                                     AppEvent::SessionUpdated { session }
-                                }
+                }
                                 SessionDiscoveryUpdate::SessionRemoved(file_path) => {
                                     AppEvent::SessionRemoved { file_path }
-                                }
+                }
                                 SessionDiscoveryUpdate::Complete => {
                                     AppEvent::SessionDiscoveryComplete
-                                }
-                            };
+                }
+                };
                             send_app_event(&event_tx, event, "session_discovery_update");
-                        });
-                    });
+                });
+                });
                 }
                 Effect::ImportSession(session) => {
                     // Create a new tab with the session's agent type and working directory
@@ -2904,8 +2912,8 @@ impl App {
                             "title_generated",
                         ) {
                             tracing::debug!(%session_id, "Failed to send TitleGenerated event");
-                        }
-                    });
+                }
+                });
                 }
             }
         }
@@ -3113,10 +3121,10 @@ impl App {
                             dirs::home_dir()
                                 .map(|home| home.join(rest))
                                 .expect("checked above")
-                        } else {
+                } else {
                             std::path::PathBuf::from(path)
-                        }
-                    }
+                }
+                }
                 };
 
                 // Resolve relative paths against the active workspace (fallback to config working dir)
@@ -3363,7 +3371,7 @@ impl App {
                 if let Some(session_tab_dao) = session_tab_dao.as_ref() {
                     if let Err(e) = session_tab_dao.set_open(saved.id, true) {
                         tracing::warn!(error = %e, "Failed to mark saved session as open");
-                    }
+                }
                 }
             }
             if let Some(saved) = saved_tab {
@@ -3382,6 +3390,7 @@ impl App {
 
                     // Load chat history
                     match saved.agent_type {
+AgentType::Ollama => todo!(),
                         AgentType::Claude => {
                             if let Ok((msgs, debug_entries, file_path)) =
                                 load_claude_history_with_debug(session_id_str)
@@ -3394,9 +3403,9 @@ impl App {
                                 );
                                 for msg in msgs {
                                     session.chat_view.push(msg);
-                                }
-                            }
-                        }
+                }
+                }
+                }
                         AgentType::Codex => {
                             if let Ok((msgs, debug_entries, file_path)) =
                                 load_codex_history_with_debug(session_id_str)
@@ -3409,17 +3418,17 @@ impl App {
                                 );
                                 for msg in msgs {
                                     session.chat_view.push(msg);
-                                }
-                            }
-                        }
+                }
+                }
+                }
                         AgentType::Gemini => {
                             session.chat_view.push(
                                 MessageDisplay::System {
                                     content: "Gemini CLI history import isn't supported yet, so previous messages won't be shown.".to_string(),
-                                }
+                }
                                 .to_chat_message(),
                             );
-                        }
+                }
                         AgentType::Opencode => {
                             if let Ok((msgs, debug_entries, file_path)) =
                                 load_opencode_history_with_debug(session_id_str)
@@ -3431,10 +3440,10 @@ impl App {
                                 );
                                 for msg in msgs {
                                     session.chat_view.push(msg);
-                                }
-                            }
-                        }
-                    }
+                }
+                }
+                }
+                }
                 } else if saved.agent_type == AgentType::Opencode {
                     if let Some(working_dir) = session.working_dir.as_ref() {
                         if let Ok((session_id_str, msgs, debug_entries, file_path)) =
@@ -3451,9 +3460,9 @@ impl App {
                             );
                             for msg in msgs {
                                 session.chat_view.push(msg);
-                            }
-                        }
-                    }
+                }
+                }
+                }
                 }
 
                 // Restore pending user message if it exists and isn't already in history
@@ -3470,10 +3479,10 @@ impl App {
                     if !already_in_history {
                         let display = MessageDisplay::User {
                             content: pending.clone(),
-                        };
+                };
                         session.chat_view.push(display.to_chat_message());
                         session.pending_user_message = Some(pending.clone());
-                    }
+                }
                 }
 
                 if !saved.queued_messages.is_empty() {
@@ -3527,6 +3536,7 @@ impl App {
             AgentType::Codex => crate::util::Tool::Codex,
             AgentType::Gemini => crate::util::Tool::Gemini,
             AgentType::Opencode => crate::util::Tool::Opencode,
+            AgentType::Ollama => crate::util::Tool::Opencode, // Reuse Opencode tool/availability for now
         }
     }
 
@@ -3594,7 +3604,7 @@ impl App {
                 if !num_str.is_empty() {
                     if let Ok(num) = num_str.parse::<u32>() {
                         return Some(num);
-                    }
+                }
                 }
             }
         }
@@ -4317,6 +4327,7 @@ impl App {
 
         // Load history based on agent type
         match agent_type {
+AgentType::Ollama => todo!(),
             AgentType::Claude => {
                 if let Ok((msgs, debug_entries, file_path)) =
                     load_claude_history_with_debug(&session_id_str)
@@ -4328,7 +4339,7 @@ impl App {
                     );
                     for msg in msgs {
                         session.chat_view.push(msg);
-                    }
+                }
                 }
             }
             AgentType::Codex => {
@@ -4342,7 +4353,7 @@ impl App {
                     );
                     for msg in msgs {
                         session.chat_view.push(msg);
-                    }
+                }
                 }
             }
             AgentType::Gemini => {
@@ -4351,7 +4362,7 @@ impl App {
                 session.chat_view.push(
                     MessageDisplay::System {
                         content: "Gemini CLI session import isn't supported yet.".to_string(),
-                    }
+                }
                     .to_chat_message(),
                 );
             }
@@ -4366,7 +4377,7 @@ impl App {
                     );
                     for msg in msgs {
                         session.chat_view.push(msg);
-                    }
+                }
                 }
             }
         }
@@ -4486,9 +4497,9 @@ impl App {
                                             format!("Copied session ID: {}", id_str),
                                             Duration::from_secs(3),
                                         );
-                                    }
+                }
                                     self.state.last_raw_events_click = None;
-                                }
+                }
                                 RawEventsClick::Event(clicked_index) => {
                                     // Check for double-click (same index within 500ms)
                                     let now = Instant::now();
@@ -4498,23 +4509,23 @@ impl App {
                                         last_index == clicked_index
                                             && now.duration_since(last_time)
                                                 < Duration::from_millis(500)
-                                    } else {
+                } else {
                                         false
-                                    };
+                };
 
                                     if is_double_click {
                                         // Double-click: toggle detail panel
                                         session.raw_events_view.toggle_detail();
                                         self.state.last_raw_events_click = None;
-                                    } else {
+                } else {
                                         // Single click: just select (already done in handle_click)
                                         self.state.last_raw_events_click =
                                             Some((now, clicked_index));
-                                    }
-                                }
-                            }
-                        }
-                    }
+                }
+                }
+                }
+                }
+                }
                     return Ok(effects);
                 }
             }
@@ -4597,7 +4608,7 @@ impl App {
                     // Create new workspace
                     if let Some(parent_id) = node.parent_id {
                         return self.start_workspace_creation(parent_id);
-                    }
+                }
                 }
             }
         }
@@ -4813,7 +4824,7 @@ impl App {
                     if session.capabilities.supports_plan_mode {
                         session.agent_mode = session.agent_mode.toggle();
                         session.update_status();
-                    }
+                }
                 }
             } else if relative_x >= model_start && relative_x < model_end && !shell_mode {
                 let should_block_model_switch = self
@@ -4825,7 +4836,7 @@ impl App {
                             || session.tools_in_flight > 0
                             || session.pending_user_message.is_some()
                             || session.inline_prompt.is_some()
-                    });
+                });
                 if should_block_model_switch {
                     self.state.set_timed_footer_message(
                         "Finish the current response before switching models".to_string(),
@@ -4854,7 +4865,7 @@ impl App {
                             || session.tools_in_flight > 0
                             || session.pending_user_message.is_some()
                             || session.inline_prompt.is_some()
-                    });
+                });
                 if should_block_model_switch {
                     self.state.set_timed_footer_message(
                         "Finish the current response before switching models".to_string(),
@@ -4985,7 +4996,7 @@ impl App {
                             ),
                         );
                         return None;
-                    }
+                }
 
                     if let Some(session) = self.state.tab_manager.active_session_mut() {
                         let agent_changed =
@@ -4996,12 +5007,12 @@ impl App {
                                 "Switched to {} with model: {}",
                                 model.agent_type, model.display_name
                             )
-                        } else {
+                } else {
                             format!("Model changed to: {}", model.display_name)
-                        };
+                };
                         let display = MessageDisplay::System { content: msg };
                         session.chat_view.push(display.to_chat_message());
-                    }
+                }
                 }
                 self.state.model_selector_state.hide();
                 self.state.input_mode = InputMode::Normal;
@@ -5181,13 +5192,13 @@ impl App {
                         self.state.sidebar_data.expand_repo(created.repo_id);
                         if let Some(index) = self.find_workspace_index(created.workspace_id) {
                             self.state.sidebar_state.tree_state.selected = index;
-                        }
+                }
                         // Open workspace, close sidebar, and focus prompt box
                         self.open_workspace_with_options(created.workspace_id, true);
-                    }
+                }
                     Err(err) => {
                         self.show_error("Workspace Creation Failed", &err);
-                    }
+                }
                 }
             }
             AppEvent::ForkWorkspaceCreated {
@@ -5201,11 +5212,11 @@ impl App {
                         self.state.sidebar_data.expand_repo(created.repo_id);
                         if let Some(index) = self.find_workspace_index(created.workspace_id) {
                             self.state.sidebar_state.tree_state.selected = index;
-                        }
+                }
                         match self.finish_fork_session(created.workspace_id) {
                             Ok(mut fork_effects) => {
                                 effects.append(&mut fork_effects);
-                            }
+                }
                             Err(err) => {
                                 // Clean up fork seed
                                 if let Some(pending) = self.state.pending_fork_request.take() {
@@ -5217,10 +5228,10 @@ impl App {
                                                     seed_id = %seed_id,
                                                     "Failed to delete fork seed after fork error"
                                                 );
-                                            }
-                                        }
-                                    }
-                                }
+                }
+                }
+                }
+                }
                                 // Attempt to clean up the created workspace
                                 let cleanup_msg = self
                                     .cleanup_fork_workspace(created.workspace_id, created.repo_id);
@@ -5231,11 +5242,11 @@ impl App {
                                         err, cleanup_err
                                     ),
                                     None => err.to_string(),
-                                };
+                };
                                 self.show_error("Fork Failed", &error_msg);
-                            }
-                        }
-                    }
+                }
+                }
+                }
                     Err(err) => {
                         if let Some(pending) = self.state.pending_fork_request.take() {
                             if let Some(seed_id) = pending.fork_seed_id {
@@ -5246,12 +5257,12 @@ impl App {
                                             seed_id = %seed_id,
                                             "Failed to delete fork seed after fork error"
                                         );
-                                    }
-                                }
-                            }
-                        }
+                }
+                }
+                }
+                }
                         self.show_error("Fork Failed", &err);
-                    }
+                }
                 }
             }
             AppEvent::WorkspaceArchived {
@@ -5267,7 +5278,7 @@ impl App {
                                 "Workspace archived with warnings",
                                 &archived.warnings.join("\n"),
                             );
-                        }
+                }
 
                         self.close_tabs_for_workspace(archived.workspace_id);
 
@@ -5278,18 +5289,18 @@ impl App {
                         if visible_count > 0 {
                             let new_selection = if current_selection > 0 {
                                 current_selection - 1
-                            } else {
+                } else {
                                 0
-                            };
+                };
                             self.state.sidebar_state.tree_state.selected =
                                 new_selection.min(visible_count - 1);
-                        } else {
+                } else {
                             self.state.sidebar_state.tree_state.selected = 0;
-                        }
-                    }
+                }
+                }
                     Err(err) => {
                         self.show_error("Archive Failed", &err);
-                    }
+                }
                 }
             }
             AppEvent::ProjectRemoved { result } => {
@@ -5314,9 +5325,9 @@ impl App {
                 if visible_count > 0 {
                     let new_selection = if current_selection > 0 {
                         current_selection - 1
-                    } else {
+                } else {
                         0
-                    };
+                };
                     self.state.sidebar_state.tree_state.selected =
                         new_selection.min(visible_count - 1);
                     self.state.input_mode = InputMode::SidebarNavigation;
@@ -5357,9 +5368,9 @@ impl App {
                             content:
                                 "Fork created; context injected. Waiting for your next prompt."
                                     .to_string(),
-                        };
+                };
                         session.chat_view.push(display.to_chat_message());
-                    }
+                }
                 }
             }
             AppEvent::AgentStartFailed { session_id, error } => {
@@ -5404,7 +5415,7 @@ impl App {
                             "Failed to terminate agent; process may still be running".to_string(),
                             Duration::from_secs(5),
                         );
-                    }
+                }
                 }
             }
             AppEvent::AgentStreamEnded { session_id } => {
@@ -5429,16 +5440,16 @@ impl App {
                         let was_processing = if session.is_processing {
                             session.stop_processing();
                             true
-                        } else {
+                } else {
                             false
-                        };
+                };
 
                         Self::flush_pending_agent_output(session);
                         session.tools_in_flight = 0;
                         was_processing
-                    } else {
+                } else {
                         false
-                    };
+                };
                 // Only stop footer spinner if this was the active tab
                 if was_processing && is_active_tab {
                     self.state.stop_footer_spinner();
@@ -5448,7 +5459,7 @@ impl App {
                     Ok(mut queued_effects) => effects.append(&mut queued_effects),
                     Err(err) => {
                         tracing::warn!(error = %err, "Failed to drain queued messages");
-                    }
+                }
                 }
             }
             AppEvent::SessionsCacheLoaded { sessions } => {
@@ -5523,7 +5534,7 @@ impl App {
                     None => {
                         tracing::warn!("tools_in_flight underflow on OpencodeQuestionResponse");
                         0
-                    }
+                }
                 };
                 session.set_processing_state(ProcessingState::Thinking);
 
@@ -5536,7 +5547,7 @@ impl App {
                     session.chat_view.push(
                         MessageDisplay::Error {
                             content: format!("OpenCode question response failed: {}", err),
-                        }
+                }
                         .to_chat_message(),
                     );
                 }
@@ -5569,7 +5580,7 @@ impl App {
                         session.title = Some(generated.title.clone());
                         if let Some(new_branch) = &generated.new_branch {
                             session.status_bar.set_branch_name(Some(new_branch.clone()));
-                        }
+                }
 
                         if generated.used_fallback {
                             let tool = generated.tool_used.as_deref().unwrap_or("fallback tool");
@@ -5577,7 +5588,7 @@ impl App {
                                 format!("Title generated via {}", tool),
                                 Duration::from_secs(4),
                             );
-                        }
+                }
 
                         // Update sidebar directly with new branch name
                         // (avoids stale DB read if DB update failed but git rename succeeded)
@@ -5587,11 +5598,11 @@ impl App {
                             self.state
                                 .sidebar_data
                                 .update_workspace_branch(ws_id, Some(new_branch.clone()));
-                        }
+                }
 
                         // Save session state to persist the title
                         effects.push(Effect::SaveSessionState);
-                    }
+                }
                     Err(e) => {
                         tracing::warn!(%session_id, error = %e, "Failed to generate session title");
                         // Show transient footer message (less noisy than chat message)
@@ -5599,7 +5610,7 @@ impl App {
                             format!("Title generation failed: {}", e),
                             Duration::from_secs(5),
                         );
-                    }
+                }
                 }
             }
             _ => {}
@@ -5651,13 +5662,13 @@ impl App {
                                 .sidebar_data
                                 .clear_workspace_pr_status(workspace_id);
                             continue;
-                        }
+                }
 
                         if let Some(status) = status.clone() {
                             Self::apply_pr_status_to_session(session, status);
                             any_session_updated = true;
-                        }
-                    }
+                }
+                }
                 }
                 // Update sidebar data when we have an accepted association or when not stale.
                 if !is_stale_pr || any_session_updated {
@@ -5686,7 +5697,7 @@ impl App {
                 for session in self.state.tab_manager.sessions_mut() {
                     if session.workspace_id == Some(workspace_id) {
                         session.status_bar.set_git_diff_stats(stats.clone());
-                    }
+                }
                 }
                 // Also update sidebar data
                 self.state
@@ -5798,9 +5809,9 @@ impl App {
                             "type": event_type,
                             "serialize_failed": true,
                             "error": error.to_string(),
-                        });
+                });
                         (event_type.to_string(), fallback)
-                    }
+                }
                 },
             };
             session.record_raw_event(EventDirection::Received, event_type, raw_json);
@@ -5821,31 +5832,31 @@ impl App {
                     session.stop_processing();
                     if session.inline_prompt.is_none() {
                         session.agent_input_tx = None;
-                    }
+                }
                     if session.inline_prompt.is_none() && !session.queued_messages.is_empty() {
                         should_drain_queue = true;
-                    }
+                }
                     // Safety net: avoid suppressing a future real assistant message
                     // (in case the final assistant message event never arrived)
                     session.suppress_next_assistant_reply = false;
                     // Only stop footer spinner if this is the active tab
                     if is_active_tab {
                         should_stop_footer_spinner = true;
-                    }
+                }
                     session.chat_view.finalize_streaming();
                     // Add turn summary to chat
                     if session.suppress_next_turn_summary {
                         session.suppress_next_turn_summary = false;
-                    } else {
+                } else {
                         if session.pending_turn_summary.is_some() {
                             Self::flush_pending_agent_output(session);
-                        }
+                }
                         let summary = session.current_turn_summary.clone();
                         session.pending_turn_summary = Some(summary);
                         if session.chat_view.streaming_buffer().is_none() {
                             Self::flush_pending_agent_output(session);
-                        }
-                    }
+                }
+                }
                 }
                 AgentEvent::TurnFailed(failed) => {
                     session.stop_processing();
@@ -5856,12 +5867,12 @@ impl App {
                     // Only stop footer spinner if this is the active tab
                     if is_active_tab {
                         should_stop_footer_spinner = true;
-                    }
+                }
                     session.suppress_next_assistant_reply = false;
                     session.suppress_next_turn_summary = false;
                     let display = MessageDisplay::Error {
                         content: failed.error,
-                    };
+                };
                     session.chat_view.push(display.to_chat_message());
                 }
                 AgentEvent::AssistantReasoning(reasoning) => {
@@ -5875,10 +5886,10 @@ impl App {
                     if session.suppress_next_assistant_reply {
                         if msg.is_final {
                             session.suppress_next_assistant_reply = false;
-                        }
+                }
                         // Skip rendering the fork seed acknowledgement
                         return Ok(());
-                    }
+                }
                     // Track streaming tokens (rough estimate: ~4 chars per token)
                     let token_estimate = (msg.text.len() / 4).max(1);
                     session.add_streaming_tokens(token_estimate);
@@ -5888,13 +5899,13 @@ impl App {
                         if let Some(pr_num) = Self::extract_pr_number_from_text(&msg.text) {
                             pending_sidebar_pr_update =
                                 Self::apply_pr_number_to_session(session, pr_num);
-                        }
-                    }
+                }
+                }
 
                     session.chat_view.stream_append(&msg.text);
                     if msg.is_final {
                         Self::flush_pending_agent_output(session);
-                    }
+                }
                 }
                 AgentEvent::ToolStarted(tool) => {
                     // Check for special interactive tools that use inline prompts
@@ -5915,7 +5926,7 @@ impl App {
                                 // Stop footer spinner since we're now awaiting user response
                                 should_stop_footer_spinner = true;
                                 true
-                            }
+                }
                             Err(e) => {
                                 tracing::warn!(
                                     tool_id = %tool.tool_id,
@@ -5927,12 +5938,12 @@ impl App {
                                 // Surface error to user so they know why prompt didn't appear
                                 let display = MessageDisplay::Error {
                                     content: format!("Failed to parse AskUserQuestion: {}", e),
-                                };
+                };
                                 session.chat_view.push(display.to_chat_message());
                                 false
-                            }
-                        }
-                    } else if tool.tool_name == "ExitPlanMode" {
+                }
+                }
+                } else if tool.tool_name == "ExitPlanMode" {
                         // Use plan content from tool arguments when available
                         let (plan_content, plan_path) =
                             match serde_json::from_value::<ExitPlanModeWrapper>(
@@ -5942,7 +5953,7 @@ impl App {
                                     let plan_path = Self::read_plan_file_path_for_session(session)
                                         .unwrap_or_else(|| ".claude/plans/plan.md".to_string());
                                     (wrapper.plan, plan_path)
-                                }
+                }
                                 Err(e) => {
                                     // Fall back to reading plan from file
                                     tracing::debug!(
@@ -5951,8 +5962,8 @@ impl App {
                                         "ExitPlanMode arguments missing plan, falling back to file"
                                     );
                                     Self::read_plan_file_for_session(session)
-                                }
-                            };
+                }
+                };
 
                         session.inline_prompt = Some(InlinePromptState::new_exit_plan(
                             tool.tool_id.clone(),
@@ -5966,9 +5977,9 @@ impl App {
                         // Stop footer spinner since we're now awaiting user response
                         should_stop_footer_spinner = true;
                         true
-                    } else {
+                } else {
                         false
-                    };
+                };
 
                     // Skip normal tool processing for inline prompt tools
                     if !is_inline_prompt_tool {
@@ -5981,19 +5992,19 @@ impl App {
 
                         let args_str = if tool.arguments.is_null() {
                             String::new()
-                        } else {
+                } else {
                             // Compact single-line for display
                             serde_json::to_string(&tool.arguments).unwrap_or_default()
-                        };
+                };
                         let display = MessageDisplay::Tool {
                             name: MessageDisplay::tool_display_name_owned(&tool.tool_name),
                             args: args_str,
                             output: "Running...".to_string(),
                             exit_code: None,
                             file_size: None, // Only set for Read tool on images via update_last_tool
-                        };
+                };
                         session.chat_view.push(display.to_chat_message());
-                    }
+                }
                 }
                 AgentEvent::ControlRequest(request) => {
                     if let Some(tool_use_id) = request.tool_use_id.clone() {
@@ -6019,23 +6030,23 @@ impl App {
                                                 "Failed to send deferred control response: {}",
                                                 err
                                             );
-                                        }
-                                    });
+                }
+                });
                                     session.start_processing();
                                     session.set_processing_state(ProcessingState::Thinking);
                                     if is_active_tab {
                                         should_start_footer_spinner = true;
-                                    }
-                                }
-                            }
+                }
+                }
+                }
                             session.pending_tool_permissions.remove(&tool_use_id);
-                        }
-                    } else {
+                }
+                } else {
                         tracing::warn!(
                             tool_name = request.tool_name,
                             "Control request missing tool_use_id"
                         );
-                    }
+                }
                 }
                 AgentEvent::ToolCompleted(tool) => {
                     tracing::info!(
@@ -6052,8 +6063,8 @@ impl App {
                         None => {
                             tracing::warn!("tools_in_flight underflow on ToolCompleted");
                             0
-                        }
-                    };
+                }
+                };
 
                     // Track file changes for write/edit tools
                     if tool.success {
@@ -6068,20 +6079,20 @@ impl App {
                                 if let Some(filename) = Self::extract_filename(result) {
                                     // Rough estimate of changes (can be refined)
                                     session.record_file_change(filename, 5, 2);
-                                }
-                            }
-                        }
-                    }
+                }
+                }
+                }
+                }
 
                     let output = if tool.success {
                         tool.result.unwrap_or_else(|| "Completed".to_string())
-                    } else {
+                } else {
                         format!("Error: {}", tool.error.unwrap_or_default())
-                    };
+                };
                     // Update the existing "Running..." message instead of pushing a new one
                     if !session.chat_view.update_last_tool(output, None) {
                         tracing::warn!("ToolCompleted: no matching tool message found to update");
-                    }
+                }
                 }
                 AgentEvent::CommandOutput(cmd) => {
                     // Check for PR URL in command output (e.g., from gh pr create)
@@ -6089,8 +6100,8 @@ impl App {
                         if let Some(pr_num) = Self::extract_pr_number_from_text(&cmd.output) {
                             pending_sidebar_pr_update =
                                 Self::apply_pr_number_to_session(session, pr_num);
-                        }
-                    }
+                }
+                }
 
                     // Update the existing "Running..." message instead of pushing a new one
                     if !session
@@ -6098,7 +6109,7 @@ impl App {
                         .update_last_tool(cmd.output.clone(), cmd.exit_code)
                     {
                         tracing::warn!("CommandOutput: no matching tool message found to update");
-                    }
+                }
                     if !cmd.is_streaming {
                         session.tools_in_flight = match session.tools_in_flight.checked_sub(1) {
                             Some(value) => value,
@@ -6107,21 +6118,21 @@ impl App {
                                     "tools_in_flight underflow on CommandOutput (non-streaming)"
                                 );
                                 0
-                            }
-                        };
-                    }
+                }
+                };
+                }
                 }
                 AgentEvent::Error(err) => {
                     let display = MessageDisplay::Error {
                         content: err.message,
-                    };
+                };
                     session.chat_view.push(display.to_chat_message());
                     if err.code.as_deref() == Some("model_not_found") {
                         session.model = None;
                         session.model_invalid = true;
                         session.update_status();
                         pending_model_invalidation = true;
-                    }
+                }
                     if err.is_fatal {
                         session.stop_processing();
                         session.chat_view.finalize_streaming();
@@ -6131,8 +6142,8 @@ impl App {
                         // Only stop footer spinner if this is the active tab
                         if is_active_tab {
                             should_stop_footer_spinner = true;
-                        }
-                    }
+                }
+                }
                 }
                 AgentEvent::TokenUsage(usage_event) => {
                     session.update_context_usage(&usage_event);
@@ -6143,18 +6154,18 @@ impl App {
                         let display = match warning.level {
                             ContextWarningLevel::Critical => MessageDisplay::Error {
                                 content: warning.message,
-                            },
+                },
                             ContextWarningLevel::High | ContextWarningLevel::Medium => {
                                 MessageDisplay::System {
                                     content: format!("⚠️ {}", warning.message),
-                                }
-                            }
+                }
+                }
                             ContextWarningLevel::Normal => MessageDisplay::System {
                                 content: format!("ℹ️ {}", warning.message),
-                            },
-                        };
+                },
+                };
                         session.chat_view.push(display.to_chat_message());
-                    }
+                }
                 }
                 AgentEvent::ContextCompaction(compaction_event) => {
                     use crate::agent::events::ContextWindowState;
@@ -6168,7 +6179,7 @@ impl App {
                             ContextWindowState::format_tokens(compaction_event.tokens_after),
                             compaction_event.reason
                         ),
-                    };
+                };
                     session.chat_view.push(display.to_chat_message());
 
                     // Clear any pending warning since we just compacted
@@ -6194,7 +6205,7 @@ impl App {
                             session_id = %session_id,
                             "Failed to persist model invalidation"
                         );
-                    }
+                }
                 } else {
                     tracing::warn!(
                         session_id = %session_id,
@@ -6288,16 +6299,16 @@ impl App {
                                         "Failed to send tool result via streaming input: {}",
                                         err
                                     );
-                                }
-                            });
+                }
+                });
                             let pending_tools = session.tools_in_flight;
                             session.start_processing();
                             session.tools_in_flight = pending_tools.saturating_sub(1);
                             session.set_processing_state(ProcessingState::Thinking);
                             self.state.start_footer_spinner(None);
                             return Vec::new();
-                        }
-                    }
+                }
+                }
                 }
 
                 match self.submit_prompt_hidden_jsonl(jsonl) {
@@ -6305,7 +6316,7 @@ impl App {
                     Err(e) => {
                         tracing::error!("Failed to send tool result: {}", e);
                         Vec::new()
-                    }
+                }
                 }
             }
             Err(e) => {
@@ -6340,7 +6351,7 @@ impl App {
                     MessageDisplay::Error {
                         content: "OpenCode question response failed: session not ready."
                             .to_string(),
-                    }
+                }
                     .to_chat_message(),
                 );
                 session.tools_in_flight = session.tools_in_flight.saturating_sub(1);
@@ -6418,8 +6429,8 @@ impl App {
                                         "Failed to send control response via streaming input: {}",
                                         err
                                     );
-                                }
-                            });
+                }
+                });
                             // Preserve tools_in_flight count, then decrement after starting processing
                             // (mirrors send_tool_result behavior for consistency)
                             let pending_tools = session.tools_in_flight;
@@ -6428,8 +6439,8 @@ impl App {
                             session.set_processing_state(ProcessingState::Thinking);
                             self.state.start_footer_spinner(None);
                             return Vec::new();
-                        }
-                    }
+                }
+                }
                 }
 
                 tracing::warn!("Unable to send control response: missing Claude input channel");
@@ -6438,7 +6449,7 @@ impl App {
                     session.stop_processing();
                     let display = MessageDisplay::Error {
                         content: "Cannot reply to prompt: missing streaming input channel. Try restarting the session.".to_string(),
-                    };
+                };
                     session.chat_view.push(display.to_chat_message());
                 }
                 self.state.stop_footer_spinner();
@@ -6451,7 +6462,7 @@ impl App {
                     session.stop_processing();
                     let display = MessageDisplay::Error {
                         content: format!("Failed to send response: {}", e),
-                    };
+                };
                     session.chat_view.push(display.to_chat_message());
                 }
                 self.state.stop_footer_spinner();
@@ -6552,16 +6563,16 @@ impl App {
                         content_blocks.push(serde_json::json!({
                             "type": "text",
                             "text": format!("Image {}:", i + 1),
-                        }));
-                    }
+                }));
+                }
                     content_blocks.push(serde_json::json!({
                         "type": "image",
                         "source": {
                             "type": "base64",
                             "media_type": media_type,
                             "data": base64_data,
-                        }
-                    }));
+                }
+                }));
                 }
                 Err(e) => {
                     tracing::warn!("Failed to encode image {}: {}", path.display(), e);
@@ -6569,7 +6580,7 @@ impl App {
                     content_blocks.push(serde_json::json!({
                         "type": "text",
                         "text": format!("[Failed to load image: {}]", path.display()),
-                    }));
+                }));
                 }
             }
         }
@@ -6721,7 +6732,7 @@ impl App {
                     .map(|answer| match answer {
                         PromptAnswer::Single(text) => vec![text.clone()],
                         PromptAnswer::Multiple(items) => items.clone(),
-                    })
+                })
                     .unwrap_or_default()
             })
             .collect()
@@ -6896,18 +6907,23 @@ impl App {
             if let Some(session) = self.state.tab_manager.session_mut(tab_index) {
                 session.stop_processing();
                 session.pending_user_message = None;
+            }
+        }
                 let display = MessageDisplay::Error {
                     content: match agent_type {
                         AgentType::Gemini => {
                             "Image attachments aren't supported for Gemini in Conduit yet."
                                 .to_string()
-                        }
+                }
                         AgentType::Opencode => {
                             "Image attachments aren't supported for OpenCode in Conduit yet."
                                 .to_string()
-                        }
-                        _ => "Image attachments aren't supported for this agent.".to_string(),
-                    },
+                }
+                        AgentType::Ollama => {
+                            "Image attachments aren't supported for Ollama in Conduit yet."
+                                .to_string()
+                }
+                },
                 };
                 session.chat_view.push(display.to_chat_message());
             }
@@ -7001,16 +7017,16 @@ impl App {
                             if let Err(err) = input_tx.send(AgentInput::ClaudeJsonl(payload)).await
                             {
                                 tracing::warn!("Failed to send streaming prompt: {}", err);
-                            }
-                        });
+                }
+                });
 
                         session.start_processing();
                         session.set_processing_state(ProcessingState::Thinking);
                         if is_active_tab {
                             self.state.start_footer_spinner(None);
-                        }
+                }
                         return Ok(Vec::new());
-                    }
+                }
                 }
             }
         }
@@ -7027,17 +7043,17 @@ impl App {
                             text: prompt_to_send,
                             images: images_to_send,
                             model: model.clone(),
-                        };
+                };
                         if let Err(err) = input_tx.send(input).await {
                             tracing::warn!("Failed to send prompt: {}", err);
-                        }
-                    });
+                }
+                });
 
                     session.start_processing();
                     session.set_processing_state(ProcessingState::Thinking);
                     if is_active_tab {
                         self.state.start_footer_spinner(None);
-                    }
+                }
                     return Ok(Vec::new());
                 }
             }
@@ -7123,7 +7139,6 @@ impl App {
         }
 
         Ok(effects)
-    }
 
     fn handle_submit_action(&mut self, mode: QueuedMessageMode) -> anyhow::Result<Vec<Effect>> {
         let mut effects = Vec::new();
@@ -7206,7 +7221,7 @@ impl App {
                         text: submission_text.clone(),
                         images,
                         created_at: Utc::now(),
-                    };
+                };
 
                     if mode == QueuedMessageMode::Steer
                         && effective_mode == QueuedMessageMode::Steer
@@ -7218,7 +7233,7 @@ impl App {
                                 immediate_submit = Some((text, image_paths, image_placeholders));
                                 interrupt_before_submit = true;
                                 queued_handled = true;
-                            }
+                }
                             crate::config::SteerFallback::Prompt => {
                                 session.queue_message(queued.clone());
                                 prompt_fallback_id = Some(queued.id);
@@ -7227,22 +7242,22 @@ impl App {
                                         .to_string(),
                                 );
                                 queued_handled = true;
-                            }
+                }
                             crate::config::SteerFallback::Queue => {
                                 session.queue_message(queued);
                                 footer_message = Some("Steering queued".to_string());
                                 queued_handled = true;
-                            }
-                        }
-                    } else {
+                }
+                }
+                } else {
                         session.queue_message(queued);
                         footer_message = Some(if mode == QueuedMessageMode::Steer {
                             "Steering queued (soft mode)".to_string()
-                        } else {
+                } else {
                             "Message queued".to_string()
-                        });
+                });
                         queued_handled = true;
-                    }
+                }
                 }
 
                 if !queued_handled {
@@ -7441,7 +7456,7 @@ impl App {
         };
 
         let temp = Builder::new()
-            .prefix("conduit-prompt-")
+            .prefix("nexus-prompt-")
             .suffix(".txt")
             .tempfile()?;
         std::fs::write(temp.path(), expanded_input)?;
@@ -7780,14 +7795,14 @@ impl App {
                     // Remove the broken tab and untrack workspace
                     if let Some(ref tracker) = self.git_tracker {
                         tracker.untrack_workspace(workspace_id);
-                    }
+                }
                     self.close_tab_at_index(new_index);
                     let fallback = prev_index.min(self.state.tab_manager.len().saturating_sub(1));
                     self.state.tab_manager.switch_to(fallback);
                     // Restore pre-fork UI state
                     if prev_sidebar_visible {
                         self.state.sidebar_state.show();
-                    }
+                }
                     self.state.input_mode = prev_input_mode;
                     self.state.sidebar_state.tree_state.selected = prev_tree_selected;
                     return Err(anyhow!(
@@ -7799,14 +7814,14 @@ impl App {
                     // Remove the broken tab and untrack workspace
                     if let Some(ref tracker) = self.git_tracker {
                         tracker.untrack_workspace(workspace_id);
-                    }
+                }
                     self.close_tab_at_index(new_index);
                     let fallback = prev_index.min(self.state.tab_manager.len().saturating_sub(1));
                     self.state.tab_manager.switch_to(fallback);
                     // Restore pre-fork UI state
                     if prev_sidebar_visible {
                         self.state.sidebar_state.show();
-                    }
+                }
                     self.state.input_mode = prev_input_mode;
                     self.state.sidebar_state.tree_state.selected = prev_tree_selected;
                     return Err(e);
@@ -7879,8 +7894,8 @@ impl App {
                                 error = %prune_err,
                                 "Failed to prune stale worktrees"
                             );
-                        }
-                    }
+                }
+                }
                 }
                 false
             }
@@ -7897,7 +7912,7 @@ impl App {
                             workspace_id = %workspace_id,
                             "Best-effort workspace directory removal failed (repo not found)"
                         );
-                    }
+                }
                 } else {
                     tracing::warn!(
                         workspace_id = %workspace_id,
@@ -7921,7 +7936,7 @@ impl App {
                             workspace_id = %workspace_id,
                             "Best-effort workspace directory removal failed (repo load error)"
                         );
-                    }
+                }
                 } else {
                     tracing::warn!(
                         workspace_id = %workspace_id,
@@ -8082,7 +8097,7 @@ impl App {
                             .working_dir
                             .as_ref()
                             .is_some_and(|dir| dir == &working_dir)
-                    })
+                })
                     .map(|session| session.id)
             });
         let preflight_workspace_id = initiating_session_id.and_then(|id| {
@@ -8135,7 +8150,7 @@ impl App {
                     if session.workspace_id == Some(workspace_id) {
                         session.pr_number = None;
                         session.status_bar.set_pr_status(None);
-                    }
+                }
                 }
                 sidebar_pr_clear = Some(workspace_id);
             } else if let Some(session_id) = initiating_session_id.take() {
@@ -8155,14 +8170,14 @@ impl App {
                     for session in self.state.tab_manager.sessions_mut() {
                         if session.workspace_id == Some(workspace_id) {
                             Self::apply_pr_status_to_session(session, status.clone());
-                        }
-                    }
+                }
+                }
                     sidebar_pr_update = Some((workspace_id, status));
                 } else if let Some(session_id) = initiating_session_id.take() {
                     if let Some(session) = self.state.tab_manager.session_by_id_mut(session_id) {
                         let status = pr.clone();
                         Self::apply_pr_status_to_session(session, status);
-                    }
+                }
                 }
 
                 let pr_url = pr.url.clone().unwrap_or_else(|| "Unknown URL".to_string());
@@ -8180,7 +8195,7 @@ impl App {
                     Some(ConfirmationContext::OpenExistingPr {
                         working_dir,
                         pr_url,
-                    }),
+                }),
                 );
                 if let Some((workspace_id, status)) = sidebar_pr_update {
                     self.state
@@ -8259,7 +8274,7 @@ impl App {
                             .working_dir
                             .as_ref()
                             .is_some_and(|dir| dir == &working_dir)
-                    })
+                })
             });
         // Generate prompt for PR creation
         let prompt = PrManager::generate_pr_prompt(&preflight);
@@ -8398,10 +8413,10 @@ impl App {
                     for (pos, msg) in session.queued_messages.drain(..).enumerate() {
                         if pos == idx {
                             queued.push(msg);
-                        } else {
+                } else {
                             remaining.push(msg);
-                        }
-                    }
+                }
+                }
                 }
                 crate::config::QueueMode::All => {
                     let mut steers = Vec::new();
@@ -8409,10 +8424,10 @@ impl App {
                     for msg in session.queued_messages.drain(..) {
                         if msg.mode == QueuedMessageMode::Steer {
                             steers.push(msg);
-                        } else {
+                } else {
                             followups.push(msg);
-                        }
-                    }
+                }
+                }
                     queued.extend(steers);
                     queued.extend(followups);
                 }
@@ -8559,7 +8574,7 @@ impl App {
                                 "Add your first project with Ctrl+N",
                                 Style::default().fg(text_muted()),
                             )));
-                        } else {
+                } else {
                             // Returning user - full message
                             lines.push(Line::from(Span::styled(
                                 "Add a new project with Ctrl+N",
@@ -8575,7 +8590,7 @@ impl App {
                                 "Select a project from the sidebar",
                                 Style::default().fg(text_muted()),
                             )));
-                        }
+                }
 
                         let paragraph =
                             Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center);
@@ -8591,7 +8606,7 @@ impl App {
                             y: message_area.y + vertical_offset,
                             width: message_area.width,
                             height: text_height,
-                        };
+                };
 
                         paragraph.render(centered_area, f.buffer_mut());
 
@@ -8599,28 +8614,28 @@ impl App {
                         if self.state.base_dir_dialog_state.is_visible() {
                             let dialog = BaseDirDialog::new();
                             dialog.render(size, f.buffer_mut(), &self.state.base_dir_dialog_state);
-                        } else if self.state.project_picker_state.is_visible() {
+                } else if self.state.project_picker_state.is_visible() {
                             let picker = ProjectPicker::new();
                             picker.render(size, f.buffer_mut(), &self.state.project_picker_state);
-                        } else if self.state.add_repo_dialog_state.is_visible() {
+                } else if self.state.add_repo_dialog_state.is_visible() {
                             let dialog = AddRepoDialog::new();
                             dialog.render(size, f.buffer_mut(), &self.state.add_repo_dialog_state);
-                        } else if self.state.session_import_state.is_visible() {
+                } else if self.state.session_import_state.is_visible() {
                             let picker = SessionImportPicker::new();
                             picker.render(size, f.buffer_mut(), &self.state.session_import_state);
-                        } else if self.state.model_selector_state.is_visible() {
+                } else if self.state.model_selector_state.is_visible() {
                             self.state.model_selector_state.update_viewport(size);
                             let selector = ModelSelector::new();
                             selector.render(size, f.buffer_mut(), &self.state.model_selector_state);
-                        } else if self.state.theme_picker_state.is_visible() {
+                } else if self.state.theme_picker_state.is_visible() {
                             self.render_theme_picker(size, f.buffer_mut());
-                        }
+                }
 
                         // Draw agent selector dialog if needed
                         if self.state.agent_selector_state.is_visible() {
                             let selector = AgentSelector::new();
                             selector.render(size, f.buffer_mut(), &self.state.agent_selector_state);
-                        }
+                }
 
                         // Draw confirmation dialog if open
                         if self.state.confirmation_dialog_state.visible {
@@ -8628,14 +8643,14 @@ impl App {
                             let dialog =
                                 ConfirmationDialog::new(&self.state.confirmation_dialog_state);
                             dialog.render(size, f.buffer_mut());
-                        }
+                }
 
                         // Draw error dialog if open
                         if self.state.error_dialog_state.visible {
                             use ratatui::widgets::Widget;
                             let dialog = ErrorDialog::new(&self.state.error_dialog_state);
                             dialog.render(size, f.buffer_mut());
-                        }
+                }
 
                         // Draw missing tool dialog if open
                         if self.state.missing_tool_dialog_state.is_visible() {
@@ -8643,7 +8658,7 @@ impl App {
                             let dialog =
                                 MissingToolDialog::new(&self.state.missing_tool_dialog_state);
                             dialog.render(size, f.buffer_mut());
-                        }
+                }
 
                         // Draw help dialog if open
                         if self.state.help_dialog_state.is_visible() {
@@ -8652,7 +8667,7 @@ impl App {
                                 f.buffer_mut(),
                                 &mut self.state.help_dialog_state,
                             );
-                        }
+                }
 
                         // Draw command palette (on top of everything)
                         if self.state.command_palette_state.is_visible() {
@@ -8661,22 +8676,22 @@ impl App {
                                 f.buffer_mut(),
                                 &self.state.command_palette_state,
                             );
-                        }
+                }
 
                         // Draw footer for empty state (sidebar-aware)
                         let footer_context =
                             if self.state.input_mode == InputMode::SidebarNavigation {
                                 FooterContext::Sidebar
-                            } else {
+                } else {
                                 FooterContext::Empty
-                            };
+                };
                         let footer = GlobalFooter::for_context(footer_context)
                             .with_spinner(self.state.footer_spinner.as_ref())
                             .with_message(self.state.footer_message.as_deref());
                         footer.render(footer_area, f.buffer_mut());
 
                         return;
-                    }
+                }
 
                     // Margins for input area (constants to avoid duplication)
                     const INPUT_MARGIN_LEFT: u16 = 2;
@@ -8696,13 +8711,13 @@ impl App {
 
                     let input_height = if has_inline_prompt {
                         0 // No input box when inline prompt is active
-                    } else if let Some(session) = self.state.tab_manager.active_session() {
+                } else if let Some(session) = self.state.tab_manager.active_session() {
                         session
                             .input_box
                             .desired_height(max_input_height, input_width)
-                    } else {
+                } else {
                         3 // Minimum height
-                    };
+                };
 
                     // When inline prompt is active, hide status bar and gap too
                     let status_bar_height = if has_inline_prompt { 0 } else { 1 };
@@ -8735,19 +8750,19 @@ impl App {
                         y: input_chunk.y,
                         width: input_chunk.width.saturating_sub(input_total_margin),
                         height: input_chunk.height,
-                    };
+                };
                     let status_bar_area_inner = Rect {
                         x: status_bar_chunk.x + INPUT_MARGIN_LEFT,
                         y: status_bar_chunk.y,
                         width: status_bar_chunk.width.saturating_sub(input_total_margin),
                         height: status_bar_chunk.height,
-                    };
+                };
                     let gap_area_inner = Rect {
                         x: gap_chunk.x + INPUT_MARGIN_LEFT,
                         y: gap_chunk.y,
                         width: gap_chunk.width.saturating_sub(input_total_margin),
                         height: gap_chunk.height,
-                    };
+                };
 
                     // Fill margin areas so they match the app background.
                     let buf = f.buffer_mut();
@@ -8761,10 +8776,10 @@ impl App {
                                     y: row_area.y,
                                     width: left_width,
                                     height: row_area.height,
-                                },
+                },
                                 style,
                             );
-                        }
+                }
                         let right_width =
                             INPUT_MARGIN_RIGHT.min(row_area.width.saturating_sub(left_width));
                         if right_width > 0 {
@@ -8776,11 +8791,11 @@ impl App {
                                     y: row_area.y,
                                     width: right_width,
                                     height: row_area.height,
-                                },
+                },
                                 style,
                             );
-                        }
-                    };
+                }
+                };
 
                     use crate::ui::components::bg_base;
                     let margin_bg = bg_base();
@@ -8797,8 +8812,8 @@ impl App {
                             buf[(x, gap_area_inner.y)]
                                 .set_char('▀')
                                 .set_fg(status_bar_bg());
-                        }
-                    }
+                }
+                }
 
                     // Store layout areas for mouse hit-testing
                     // Set hidden areas to None when inline prompt is active to avoid hit-testing confusion
@@ -8807,14 +8822,14 @@ impl App {
                     self.state.raw_events_area = None;
                     self.state.input_area = if has_inline_prompt {
                         None
-                    } else {
+                } else {
                         Some(input_area_inner)
-                    };
+                };
                     self.state.status_bar_area = if has_inline_prompt {
                         None
-                    } else {
+                } else {
                         Some(status_bar_area_inner)
-                    };
+                };
                     self.state.footer_area = Some(footer_area);
 
                     // Draw tab bar (unfocused when sidebar is focused)
@@ -8840,17 +8855,17 @@ impl App {
 
                         self.state.chat_area = if chat_area.height == 0 {
                             None
-                        } else {
+                } else {
                             Some(chat_area)
-                        };
+                };
 
                         // Render chat with thinking indicator if processing (but not during inline prompt)
                         let thinking_line =
                             if session.is_processing && session.inline_prompt.is_none() {
                                 Some(session.thinking_indicator.render())
-                            } else {
+                } else {
                                 None
-                            };
+                };
                         let input_mode = self.state.input_mode;
                         let queue_lines =
                             app_queue::build_queue_lines(session, chat_area.width, input_mode);
@@ -8876,7 +8891,7 @@ impl App {
                         // Render input box (not in command mode, not when inline prompt active)
                         if !is_command_mode && !has_inline_prompt {
                             session.input_box.render(input_area_inner, f.buffer_mut());
-                        }
+                }
                         // Update and render status bar (skip when inline prompt is active)
                         if !has_inline_prompt {
                             session.status_bar.set_metrics(
@@ -8896,7 +8911,7 @@ impl App {
                             session
                                 .status_bar
                                 .render(status_bar_area_inner, f.buffer_mut());
-                        }
+                }
 
                         // Set cursor position (accounting for scroll)
                         if self.state.input_mode == InputMode::Normal {
@@ -8908,9 +8923,9 @@ impl App {
                                     .input_box
                                     .cursor_position(input_area_inner, scroll_offset);
                                 f.set_cursor_position((cx, cy));
-                            }
-                        }
-                    }
+                }
+                }
+                }
 
                     // Render command prompt if in command mode (outside session borrow)
                     if is_command_mode {
@@ -8922,11 +8937,11 @@ impl App {
                         let cx = (input_area_inner.x + prompt_width).min(max_x);
                         let cy = input_area_inner.y + 1; // top padding
                         f.set_cursor_position((cx, cy));
-                    }
+                }
 
                     if self.state.slash_menu_state.is_visible() && !has_inline_prompt {
                         self.render_slash_menu(chat_chunk, input_area_inner, f.buffer_mut());
-                    }
+                }
 
                     // Draw footer (full width) - context-aware based on input mode
                     let footer = GlobalFooter::from_state(
@@ -8981,7 +8996,7 @@ impl App {
                         session
                             .raw_events_view
                             .render(raw_events_chunk, f.buffer_mut());
-                    }
+                }
 
                     // Draw footer (full width) - context-aware based on input mode
                     let footer = GlobalFooter::from_state(
@@ -9192,10 +9207,10 @@ impl App {
                         let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
                         if width + w > target {
                             break;
-                        }
+                }
                         width += w;
                         tail.insert(0, ch);
-                    }
+                }
                     format!("...{}", tail)
                 }
             } else {
@@ -9384,10 +9399,10 @@ impl App {
                             if let Ok(modified) = metadata.modified() {
                                 if newest.as_ref().is_none_or(|(_, t)| modified > *t) {
                                     newest = Some((path, modified));
-                                }
-                            }
-                        }
-                    }
+                }
+                }
+                }
+                }
                 }
             }
         }
@@ -9424,11 +9439,11 @@ impl App {
                 for word in line.split_whitespace() {
                     let word = word.trim_matches(|c: char| {
                         !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-'
-                    });
+                });
                     if word.contains('.') && !word.starts_with('.') {
                         // Looks like a filename
                         return Some(word.to_string());
-                    }
+                }
                 }
             }
         }
@@ -9442,17 +9457,17 @@ impl App {
 
         let timestamp = Local::now().format("%Y%m%d_%H%M%S");
 
-        // Save to ~/.conduit/debug/ directory
+        // Save to ~/.nexus/debug/ directory
         let debug_dir = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".conduit")
+            .join(".nexus")
             .join("debug");
 
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&debug_dir)
             .map_err(|e| format!("Could not create debug directory: {}", e))?;
 
-        let filepath = debug_dir.join(format!("conduit_debug_{}.json", timestamp));
+        let filepath = debug_dir.join(format!("nexus_debug_{}.json", timestamp));
 
         let mut sessions_data = Vec::new();
 
@@ -9472,9 +9487,9 @@ impl App {
                                 "filename": f.filename,
                                 "additions": f.additions,
                                 "deletions": f.deletions,
-                            })).collect::<Vec<_>>(),
-                        })
-                    });
+                })).collect::<Vec<_>>(),
+                })
+                });
 
                     json!({
                         "role": format!("{:?}", msg.role),
@@ -9485,7 +9500,7 @@ impl App {
                         "is_streaming": msg.is_streaming,
                         "has_summary": msg.summary.is_some(),
                         "summary": summary_data,
-                    })
+                })
                 })
                 .collect();
 
@@ -9501,7 +9516,7 @@ impl App {
                         "direction": format!("{:?}", evt.direction),
                         "event_type": evt.event_type,
                         "raw_json": evt.raw_json,
-                    })
+                })
                 })
                 .collect();
 
@@ -9560,7 +9575,6 @@ impl App {
 
         Ok(full_path)
     }
-}
 
 struct SessionStateSnapshot {
     tabs: Vec<SessionTab>,
@@ -9668,7 +9682,7 @@ async fn generate_title_and_branch_impl(
                     let rename_join_result = tokio::task::spawn_blocking(move || {
                         wm.rename_branch(&wd, &old, &new_name)
                             .map_err(|e| e.to_string())
-                    })
+                })
                     .await;
 
                     match rename_join_result {
@@ -9686,15 +9700,15 @@ async fn generate_title_and_branch_impl(
                                                     "Failed to update workspace branch to {}: {}",
                                                     new_branch, e
                                                 )
-                                            })
-                                        } else {
+                })
+                } else {
                                             Err(format!(
                                                 "Workspace {} not found for branch update",
                                                 ws_id
                                             ))
-                                        }
-                                    }
-                                })
+                }
+                }
+                })
                                 .await;
 
                                 // Log any errors from the DB update (don't fail the whole operation)
@@ -9706,18 +9720,18 @@ async fn generate_title_and_branch_impl(
                                             workspace_id = %ws_id,
                                             "Failed to persist branch rename to database"
                                         );
-                                    }
+                }
                                     Err(e) => {
                                         tracing::warn!(
                                             error = %e,
                                             workspace_id = %ws_id,
                                             "spawn_blocking failed for database update"
                                         );
-                                    }
-                                }
-                            }
+                }
+                }
+                }
                             Some(new_branch_name)
-                        }
+                }
                         Ok(Err(e)) => {
                             tracing::warn!(
                                 error = %e,
@@ -9726,7 +9740,7 @@ async fn generate_title_and_branch_impl(
                                 "Failed to rename git branch"
                             );
                             None
-                        }
+                }
                         Err(e) => {
                             tracing::warn!(
                                 error = %e,
@@ -9735,8 +9749,8 @@ async fn generate_title_and_branch_impl(
                                 "spawn_blocking join failed during branch rename"
                             );
                             None
-                        }
-                    }
+                }
+                }
                 } else {
                     None
                 }
@@ -9777,7 +9791,7 @@ mod tests {
         TEST_DATA_DIR
             .get_or_init(|| {
                 let dir = tempfile::Builder::new()
-                    .prefix("conduit-test-data-")
+                    .prefix("nexus-test-data-")
                     .tempdir()
                     .expect("Failed to create test data dir");
                 let path = dir.path().to_path_buf();
@@ -9793,7 +9807,7 @@ mod tests {
         init_test_data_dir();
         let config = Config::default();
         let tools = ToolAvailability::default();
-        let core = crate::core::ConduitCore::new(config, tools);
+        let core = crate::core::NexusCore::new(config, tools);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let mut state = AppState::new(10);
 
@@ -10639,5 +10653,4 @@ mod tests {
         assert!(!app.state.agent_selector_state.is_visible());
         assert!(app.state.tab_manager.active_session().is_some());
         assert!(effects.is_empty());
-    }
 }
