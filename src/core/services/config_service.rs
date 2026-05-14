@@ -1,19 +1,19 @@
 use crate::agent::{AgentType, ModelRegistry};
 use crate::config::save_default_model;
 use crate::core::services::error::ServiceError;
-use crate::core::ConduitCore;
+use crate::core::NexusCore;
 
 pub struct ConfigService;
 
 impl ConfigService {
-    pub fn default_model(core: &ConduitCore) -> (AgentType, String) {
+    pub fn default_model(core: &NexusCore) -> (AgentType, String) {
         let agent = core.config().default_agent;
         let model = core.config().default_model_for(agent);
         (agent, model)
     }
 
     pub fn set_default_model(
-        core: &mut ConduitCore,
+        core: &mut NexusCore,
         agent_type: AgentType,
         model_id: &str,
     ) -> Result<(), ServiceError> {

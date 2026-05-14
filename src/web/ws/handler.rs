@@ -16,7 +16,7 @@ use crate::agent::events::AgentEvent;
 use crate::agent::runner::{AgentInput, AgentRunner, AgentStartConfig, AgentType};
 use crate::agent::session::SessionId;
 use crate::core::services::{SessionService, UpdateSessionParams};
-use crate::core::ConduitCore;
+use crate::core::NexusCore;
 use crate::ui::app_prompt;
 use crate::util::{generate_title_and_branch, get_git_username, sanitize_branch_suffix};
 use serde_json::json;
@@ -37,7 +37,7 @@ struct ActiveSession {
 /// Manages active agent sessions and their event streams.
 pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<Uuid, ActiveSession>>>,
-    core: Arc<RwLock<ConduitCore>>,
+    core: Arc<RwLock<NexusCore>>,
 }
 
 struct StartSessionArgs {
@@ -58,7 +58,7 @@ struct TitleGenerationOutcome {
 }
 
 async fn persist_agent_session_id(
-    core: &Arc<RwLock<ConduitCore>>,
+    core: &Arc<RwLock<NexusCore>>,
     session_id: Uuid,
     agent_session_id: &str,
 ) -> Result<(), String> {
@@ -86,7 +86,7 @@ async fn persist_agent_session_id(
 }
 
 async fn append_input_history(
-    core: &Arc<RwLock<ConduitCore>>,
+    core: &Arc<RwLock<NexusCore>>,
     session_id: Uuid,
     input: &str,
 ) -> Result<(), String> {
@@ -97,7 +97,7 @@ async fn append_input_history(
 }
 
 async fn persist_pending_user_message(
-    core: &Arc<RwLock<ConduitCore>>,
+    core: &Arc<RwLock<NexusCore>>,
     session_id: Uuid,
     input: &str,
 ) -> Result<(), String> {
@@ -125,7 +125,7 @@ async fn persist_pending_user_message(
 }
 
 impl SessionManager {
-    pub fn new(core: Arc<RwLock<ConduitCore>>) -> Self {
+    pub fn new(core: Arc<RwLock<NexusCore>>) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             core,
@@ -166,8 +166,8 @@ impl SessionManager {
             AgentType::Codex => core.codex_runner().clone(),
             AgentType::Gemini => core.gemini_runner().clone(),
             AgentType::Opencode => core.opencode_runner().clone(),
-        };
-
+            AgentType::Ollama => core.ollama_runner().clone(),
+            };
         if !runner.is_available() {
             return Err(format!("{} is not available", agent_type.display_name()));
         }
@@ -435,7 +435,7 @@ impl SessionManager {
         // Send as appropriate input type based on agent
         let agent_input = match agent_type {
             AgentType::Claude => AgentInput::ClaudeJsonl(input),
-            AgentType::Codex | AgentType::Gemini | AgentType::Opencode => AgentInput::CodexPrompt {
+            AgentType::Codex | AgentType::Gemini | AgentType::Opencode | AgentType::Ollama => AgentInput::CodexPrompt {
                 text: input,
                 images,
                 model,
@@ -503,7 +503,7 @@ fn should_generate_title(hidden: bool, session: &crate::data::SessionTab) -> boo
 }
 
 async fn generate_title_and_branch_for_session(
-    core: Arc<RwLock<ConduitCore>>,
+    core: Arc<RwLock<NexusCore>>,
     session_id: Uuid,
     user_message: String,
     working_dir: PathBuf,
@@ -1326,6 +1326,7 @@ pub async fn handle_websocket(socket: WebSocket, session_manager: Arc<SessionMan
                 let image_paths = if images.is_empty() {
                     Vec::new()
                 } else {
+                        Some(AgentType::Ollama) => Vec::new(),
                     match agent_type {
                         Some(AgentType::Codex) => match decode_image_attachments(&images) {
                             Ok(paths) => paths,
