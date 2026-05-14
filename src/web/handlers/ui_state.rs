@@ -59,7 +59,7 @@ impl From<WebUiState> for WebUiStateResponse {
     }
 }
 
-pub(crate) fn state_store(core: &crate::core::ConduitCore) -> Result<&AppStateStore, WebError> {
+pub(crate) fn state_store(core: &crate::core::NexusCore) -> Result<&AppStateStore, WebError> {
     core.app_state_store()
         .ok_or_else(|| WebError::Internal("Database not available".to_string()))
 }

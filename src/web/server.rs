@@ -160,7 +160,7 @@ pub async fn run_server(state: WebAppState, config: ServerConfig) -> anyhow::Res
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::core::ConduitCore;
+    use crate::core::NexusCore;
     use crate::util::ToolAvailability;
     use axum::body::Body;
     use axum::http::{header, Method, Request, StatusCode};
@@ -174,7 +174,7 @@ mod tests {
         TEST_DATA_DIR
             .get_or_init(|| {
                 let dir = tempfile::Builder::new()
-                    .prefix("conduit-test-data-")
+                    .prefix("nexus-test-data-")
                     .tempdir()
                     .expect("Failed to create test data dir");
                 let path = dir.path().to_path_buf();
@@ -190,7 +190,7 @@ mod tests {
         init_test_data_dir();
         let config = Config::default();
         let tools = ToolAvailability::default();
-        let core = ConduitCore::new(config, tools);
+        let core = NexusCore::new(config, tools);
         WebAppState::new(core)
     }
 

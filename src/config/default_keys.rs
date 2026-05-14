@@ -83,7 +83,7 @@ pub fn default_keybindings() -> KeybindingConfig {
     // Terminal compatibility notes:
     // - Most terminals send Ctrl+\ as Ctrl+4 (ASCII 0x1C, the file separator character)
     // - Ctrl+Backspace is often sent as Ctrl+H (same as regular backspace)
-    // - Use `conduit debug-keys` to verify how your terminal reports key combinations
+    // - Use `nexus debug-keys` to verify how your terminal reports key combinations
     // - Tested terminals: iTerm2 (macOS), Terminal.app (macOS), Ghostty (macOS)
     // - Users can override this binding in their config if their terminal differs
     bind(&mut config.global, "C-4", Action::ToggleAgentMode);

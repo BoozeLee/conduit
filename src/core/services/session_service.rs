@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::agent::{AgentMode, AgentType, ModelRegistry};
 use crate::core::services::error::ServiceError;
-use crate::core::ConduitCore;
+use crate::core::NexusCore;
 use crate::data::{
     QueuedImageAttachment, QueuedMessage, QueuedMessageMode, SessionTab, SessionTabStore,
 };
@@ -46,7 +46,7 @@ pub struct CreateForkedSessionParams {
 }
 
 impl SessionService {
-    pub fn list_sessions(core: &ConduitCore) -> Result<Vec<SessionTab>, ServiceError> {
+    pub fn list_sessions(core: &NexusCore) -> Result<Vec<SessionTab>, ServiceError> {
         let store = core
             .session_tab_store()
             .ok_or_else(|| ServiceError::Internal("Database not available".to_string()))?;
@@ -60,7 +60,7 @@ impl SessionService {
             .collect()
     }
 
-    pub fn get_session(core: &ConduitCore, id: Uuid) -> Result<SessionTab, ServiceError> {
+    pub fn get_session(core: &NexusCore, id: Uuid) -> Result<SessionTab, ServiceError> {
         let store = core
             .session_tab_store()
             .ok_or_else(|| ServiceError::Internal("Database not available".to_string()))?;
@@ -73,7 +73,7 @@ impl SessionService {
     }
 
     pub fn create_session(
-        core: &ConduitCore,
+        core: &NexusCore,
         params: CreateSessionParams,
     ) -> Result<SessionTab, ServiceError> {
         let store = core
@@ -102,7 +102,7 @@ impl SessionService {
     }
 
     pub fn update_session(
-        core: &ConduitCore,
+        core: &NexusCore,
         id: Uuid,
         params: UpdateSessionParams,
     ) -> Result<SessionTab, ServiceError> {
@@ -174,7 +174,7 @@ impl SessionService {
     }
 
     pub fn invalidate_session_model(
-        core: &ConduitCore,
+        core: &NexusCore,
         id: Uuid,
     ) -> Result<SessionTab, ServiceError> {
         let store = core
@@ -195,7 +195,7 @@ impl SessionService {
         Ok(session)
     }
 
-    pub fn close_session(core: &ConduitCore, id: Uuid) -> Result<(), ServiceError> {
+    pub fn close_session(core: &NexusCore, id: Uuid) -> Result<(), ServiceError> {
         let store = core
             .session_tab_store()
             .ok_or_else(|| ServiceError::Internal("Database not available".to_string()))?;
@@ -208,7 +208,7 @@ impl SessionService {
     }
 
     pub fn create_imported_session(
-        core: &ConduitCore,
+        core: &NexusCore,
         params: CreateImportedSessionParams,
     ) -> Result<SessionTab, ServiceError> {
         let store = core
@@ -238,7 +238,7 @@ impl SessionService {
     }
 
     pub fn create_forked_session(
-        core: &ConduitCore,
+        core: &NexusCore,
         params: CreateForkedSessionParams,
     ) -> Result<SessionTab, ServiceError> {
         let store = core
@@ -283,7 +283,7 @@ impl SessionService {
     }
 
     pub fn get_or_create_session_for_workspace(
-        core: &ConduitCore,
+        core: &NexusCore,
         workspace_id: Uuid,
     ) -> Result<SessionTab, ServiceError> {
         let session_store = core
@@ -352,7 +352,7 @@ impl SessionService {
     }
 
     fn ensure_model(
-        core: &ConduitCore,
+        core: &NexusCore,
         store: &crate::data::SessionTabStore,
         mut session: SessionTab,
     ) -> Result<SessionTab, ServiceError> {
@@ -368,7 +368,7 @@ impl SessionService {
     }
 
     fn ensure_model_with_conn(
-        core: &ConduitCore,
+        core: &NexusCore,
         conn: &rusqlite::Connection,
         mut session: SessionTab,
     ) -> SqliteResult<SessionTab> {
@@ -381,7 +381,7 @@ impl SessionService {
         Ok(session)
     }
 
-    pub fn list_queue(core: &ConduitCore, id: Uuid) -> Result<Vec<QueuedMessage>, ServiceError> {
+    pub fn list_queue(core: &NexusCore, id: Uuid) -> Result<Vec<QueuedMessage>, ServiceError> {
         let store = core
             .session_tab_store()
             .ok_or_else(|| ServiceError::Internal("Database not available".to_string()))?;
@@ -394,7 +394,7 @@ impl SessionService {
     }
 
     pub fn add_queue_message(
-        core: &ConduitCore,
+        core: &NexusCore,
         id: Uuid,
         mode: QueuedMessageMode,
         text: String,
@@ -425,7 +425,7 @@ impl SessionService {
     }
 
     pub fn update_queue_message(
-        core: &ConduitCore,
+        core: &NexusCore,
         id: Uuid,
         message_id: Uuid,
         text: Option<String>,
@@ -478,7 +478,7 @@ impl SessionService {
     }
 
     pub fn remove_queue_message(
-        core: &ConduitCore,
+        core: &NexusCore,
         id: Uuid,
         message_id: Uuid,
     ) -> Result<QueuedMessage, ServiceError> {
@@ -506,7 +506,7 @@ impl SessionService {
         Ok(removed)
     }
 
-    pub fn get_input_history(core: &ConduitCore, id: Uuid) -> Result<Vec<String>, ServiceError> {
+    pub fn get_input_history(core: &NexusCore, id: Uuid) -> Result<Vec<String>, ServiceError> {
         let store = core
             .session_tab_store()
             .ok_or_else(|| ServiceError::Internal("Database not available".to_string()))?;
@@ -519,7 +519,7 @@ impl SessionService {
     }
 
     pub fn append_input_history(
-        core: &ConduitCore,
+        core: &NexusCore,
         id: Uuid,
         input: &str,
     ) -> Result<Vec<String>, ServiceError> {

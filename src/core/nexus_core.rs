@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::agent::{
-    ClaudeCodeRunner, CodexCliRunner, GeminiCliRunner, ModelRegistry, OpencodeRunner,
+    ClaudeCodeRunner, CodexCliRunner, GeminiCliRunner, ModelRegistry, OllamaRunner, OpencodeRunner,
 };
 use crate::config::Config;
 use crate::data::{
@@ -19,7 +19,7 @@ use crate::util::{Tool, ToolAvailability};
 /// - Agent runners for Claude, Codex, Gemini, and OpenCode
 /// - Configuration and tool availability
 /// - Worktree manager for git workspace operations
-pub struct ConduitCore {
+pub struct NexusCore {
     /// Application configuration
     config: Config,
     /// Tool availability (git, gh, claude, codex, gemini, opencode)
@@ -42,14 +42,16 @@ pub struct ConduitCore {
     codex_runner: Arc<CodexCliRunner>,
     /// Gemini CLI runner
     gemini_runner: Arc<GeminiCliRunner>,
+    /// Ollama runner
+    ollama_runner: Arc<OllamaRunner>,
     /// OpenCode runner
     opencode_runner: Arc<OpencodeRunner>,
     /// Worktree manager
     worktree_manager: WorkspaceRepoManager,
 }
 
-impl ConduitCore {
-    /// Create a new ConduitCore with the given configuration and tool availability.
+impl NexusCore {
+    /// Create a new NexusCore with the given configuration and tool availability.
     pub fn new(config: Config, tools: ToolAvailability) -> Self {
         // Initialize database and DAOs
         let (
@@ -84,7 +86,7 @@ impl ConduitCore {
         // Migrate old worktrees folder to workspaces (one-time migration)
         crate::util::migrate_worktrees_to_workspaces();
 
-        // Initialize worktree manager with managed directory (~/.conduit/workspaces)
+        // Initialize worktree manager with managed directory (~/.nexus/workspaces)
         let worktree_manager =
             WorkspaceRepoManager::with_managed_dir(crate::util::workspaces_dir());
 
@@ -105,6 +107,10 @@ impl ConduitCore {
             Some(path) => Arc::new(OpencodeRunner::with_path(path.clone())),
             None => Arc::new(OpencodeRunner::new()),
         };
+        let ollama_runner = Arc::new(OllamaRunner::new(
+            "qwen2.5-coder:1.5b".to_string(),
+            "http://localhost:11434".to_string(),
+        ));
 
         if tools.is_available(Tool::Opencode) {
             let models = crate::agent::opencode::load_opencode_models(
@@ -127,6 +133,7 @@ impl ConduitCore {
             claude_runner,
             codex_runner,
             gemini_runner,
+            ollama_runner,
             opencode_runner,
             worktree_manager,
         }
@@ -205,6 +212,11 @@ impl ConduitCore {
     /// Get the Gemini runner.
     pub fn gemini_runner(&self) -> &Arc<GeminiCliRunner> {
         &self.gemini_runner
+    }
+
+    /// Get the Ollama runner.
+    pub fn ollama_runner(&self) -> &Arc<OllamaRunner> {
+        &self.ollama_runner
     }
 
     /// Get the OpenCode runner.

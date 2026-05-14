@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use conduit::{
+use nexus::{
     config::save_tool_path,
     ui::terminal_guard,
     util::{self, Tool, ToolAvailability},
@@ -10,10 +10,10 @@ use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(name = "conduit")]
+#[command(name = "nexus")]
 #[command(about = "Multi-agent TUI for Claude Code, Codex CLI, Gemini CLI, and OpenCode")]
 struct Cli {
-    /// Custom data directory (default: ~/.conduit)
+    /// Custom data directory (default: ~/.nexus)
     #[arg(long, value_name = "PATH")]
     data_dir: Option<PathBuf>,
 
@@ -32,7 +32,7 @@ enum Commands {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Output path (default: ~/.conduit/themes/<name>.toml)
+        /// Output path (default: ~/.nexus/themes/<name>.toml)
         #[arg(short, long, value_name = "OUTPUT")]
         output: Option<PathBuf>,
 
@@ -87,7 +87,7 @@ async fn run_app() -> Result<()> {
     // Install panic hook to restore terminal state before printing panic message
     terminal_guard::install_panic_hook();
 
-    // Initialize logging to file (~/.conduit/logs/conduit.log)
+    // Initialize logging to file (~/.nexus/logs/nexus.log)
     fs::create_dir_all(util::logs_dir())?;
 
     let log_file = OpenOptions::new()
@@ -105,11 +105,11 @@ async fn run_app() -> Result<()> {
         .with_ansi(false) // Disable ANSI colors in log file
         .init();
 
-    // Create config (loads from ~/.conduit/config.toml if present)
+    // Create config (loads from ~/.nexus/config.toml if present)
     let config = Config::load();
 
     // Initialize theme from config
-    conduit::ui::components::init_theme(config.theme_name.as_deref(), config.theme_path.as_deref());
+    nexus::ui::components::init_theme(config.theme_name.as_deref(), config.theme_path.as_deref());
 
     // Detect tool availability
     let mut tools = ToolAvailability::detect(&config.tool_paths);
@@ -173,7 +173,7 @@ async fn run_app() -> Result<()> {
 /// This creates a minimal TUI just for the dialog, then returns control.
 /// Returns Some(path) if user provided a valid path, None if user chose to quit.
 fn run_blocking_tool_dialog(tool: Tool, _tools: &ToolAvailability) -> Result<Option<PathBuf>> {
-    use conduit::ui::components::{MissingToolDialog, MissingToolDialogState, MissingToolResult};
+    use nexus::ui::components::{MissingToolDialog, MissingToolDialogState, MissingToolResult};
     use crossterm::{
         event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
         execute,
@@ -272,7 +272,7 @@ fn run_blocking_tool_dialog(tool: Tool, _tools: &ToolAvailability) -> Result<Opt
 
 /// Run the theme migration command
 fn run_migrate_theme(input: &Path, output: Option<&Path>, extract_palette: bool) -> Result<()> {
-    use conduit::ui::components::theme::migrate::{
+    use nexus::ui::components::theme::migrate::{
         migrate_vscode_theme, write_theme_file, MigrateOptions,
     };
 
@@ -297,7 +297,7 @@ fn run_migrate_theme(input: &Path, output: Option<&Path>, extract_palette: bool)
     let output_path = if let Some(path) = output {
         path.to_path_buf()
     } else {
-        // Default to ~/.conduit/themes/<sanitized-name>.toml
+        // Default to ~/.nexus/themes/<sanitized-name>.toml
         let themes_dir = util::data_dir().join("themes");
         let sanitized_name: String = result
             .name
@@ -323,7 +323,7 @@ fn run_migrate_theme(input: &Path, output: Option<&Path>, extract_palette: bool)
     println!("  Type: {}", if result.is_light { "light" } else { "dark" });
     println!("  Output: {}", output_path.display());
     println!();
-    println!("To use this theme, add to your ~/.conduit/config.toml:");
+    println!("To use this theme, add to your ~/.nexus/config.toml:");
     println!("  [theme]");
     println!(
         "  name = \"{}\"",
@@ -338,8 +338,8 @@ fn run_migrate_theme(input: &Path, output: Option<&Path>, extract_palette: bool)
 
 /// Run the web server
 async fn run_web_server(host: String, port: u16) -> Result<()> {
-    use conduit::core::ConduitCore;
-    use conduit::web::{run_server, ServerConfig, WebAppState};
+    use nexus::core::NexusCore;
+    use nexus::web::{run_server, ServerConfig, WebAppState};
 
     // Initialize logging to stdout for web server mode
     tracing_subscriber::fmt()
@@ -356,8 +356,8 @@ async fn run_web_server(host: String, port: u16) -> Result<()> {
     // Detect tool availability
     let tools = ToolAvailability::detect(&config.tool_paths);
 
-    // Create ConduitCore
-    let core = ConduitCore::new(config, tools);
+    // Create NexusCore
+    let core = NexusCore::new(config, tools);
 
     // Create web app state
     let state = WebAppState::new(core);

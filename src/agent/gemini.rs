@@ -322,7 +322,7 @@ impl GeminiCliRunner {
     }
 
     fn cache_path() -> Option<PathBuf> {
-        dirs::cache_dir().map(|dir| dir.join("conduit").join("gemini_models.json"))
+        dirs::cache_dir().map(|dir| dir.join("nexus").join("gemini_models.json"))
     }
 
     fn now_secs() -> u64 {

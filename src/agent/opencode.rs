@@ -637,7 +637,7 @@ impl OpencodeRunner {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         cmd.env("NO_COLOR", "1");
-        cmd.env("OPENCODE_CLIENT", "conduit");
+        cmd.env("OPENCODE_CLIENT", "nexus");
 
         if std::env::var("OPENCODE_PERMISSION").is_err() {
             cmd.env("OPENCODE_PERMISSION", r#"{"*":"allow"}"#);
@@ -2078,7 +2078,7 @@ impl AgentRunner for OpencodeRunner {
         } else {
             timeout(
                 OPENCODE_SESSION_TIMEOUT,
-                client.create_session(Some("conduit".to_string())),
+                client.create_session(Some("nexus".to_string())),
             )
             .await
             .map_err(|_| AgentError::Timeout(OPENCODE_SESSION_TIMEOUT.as_millis() as u64))?
@@ -2305,7 +2305,7 @@ struct ModelCache {
 }
 
 fn cache_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|dir| dir.join("conduit").join("opencode_models.json"))
+    dirs::cache_dir().map(|dir| dir.join("nexus").join("opencode_models.json"))
 }
 
 fn now_secs() -> u64 {
