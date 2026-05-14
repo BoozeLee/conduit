@@ -295,6 +295,14 @@ impl ModelRegistry {
             AgentType::Codex => Self::codex_models(),
             AgentType::Gemini => Self::gemini_models(),
             AgentType::Opencode => Self::opencode_models(),
+            AgentType::Ollama => vec![ModelInfo::new(
+                AgentType::Ollama,
+                "qwen2.5-coder:1.5b",
+                "Ollama Qwen2.5-Coder 1.5B",
+                "ollama",
+                "Local model via Ollama",
+                32768,
+            )],
         }
     }
 
@@ -305,6 +313,7 @@ impl ModelRegistry {
             AgentType::Codex => "gpt-5.2-codex".to_string(),
             AgentType::Gemini => "gemini-2.5-pro".to_string(),
             AgentType::Opencode => Self::OPENCODE_DEFAULT_MODEL_ID.to_string(),
+            AgentType::Ollama => "qwen2.5-coder:1.5b".to_string(),
         }
     }
 
@@ -343,6 +352,7 @@ impl ModelRegistry {
             AgentType::Codex => "◎",
             AgentType::Gemini => "◆",
             AgentType::Opencode => "◍",
+            AgentType::Ollama => "🦙",
         }
     }
 
@@ -353,6 +363,7 @@ impl ModelRegistry {
             AgentType::Codex => "Codex",
             AgentType::Gemini => "Gemini",
             AgentType::Opencode => "OpenCode",
+            AgentType::Ollama => "Ollama",
         }
     }
 
@@ -370,6 +381,7 @@ impl ModelRegistry {
             AgentType::Codex => Self::CODEX_CONTEXT_WINDOW,
             AgentType::Gemini => Self::GEMINI_CONTEXT_WINDOW,
             AgentType::Opencode => Self::OPENCODE_CONTEXT_WINDOW,
+            AgentType::Ollama => 32768,
         }
     }
 }
