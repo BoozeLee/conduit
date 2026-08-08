@@ -32,7 +32,7 @@ jobs:
           echo "linux=$(sha256sum conduit-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)" >> $GITHUB_OUTPUT
 
       - name: Checkout homebrew-tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: conduit-cli/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
